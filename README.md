@@ -20,6 +20,8 @@ This server provides a series of tools that allow AI assistants to perform the f
 
 ## Installation
 
+> **Note:** This plugin is designed for and tested with IDA Pro version 9.0+.
+
 1. Ensure Python and related dependencies are installed:
 
 ```bash
@@ -27,7 +29,7 @@ pip install -r requirements.txt
 ```
 
 2. Copy the `ida-mcp-server.py` file to the IDA Pro plugins directory:
-   - Windows: `%APPDATA%\Hex-Rays\IDA Pro\plugins\`
+   - Windows: `%Programfiles%\IDA Pro 9.0\plugins\`
    - Linux: `~/.idapro/plugins/`
    - macOS: `~/Library/Application Support/IDA Pro/plugins/`
 
