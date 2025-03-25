@@ -29,8 +29,30 @@ import uvicorn
 # Initialize FastMCP server for IDA tools
 mcp = FastMCP("IDA MCP Server", port=3000)
 
+# 封裝函數執行在主線程的裝飾器
+def execute_on_main_thread(f):
+    @wraps(f)
+    def wrapper(*args, **kwargs):
+        result = []
+        exception = []
+        
+        def run_function():
+            try:
+                result.append(f(*args, **kwargs))
+            except Exception as e:
+                exception.append(e)
+            return 0
+        
+        ida_kernwin.execute_sync(run_function, ida_kernwin.MFF_FAST)
+        
+        if exception:
+            raise exception[0]
+        return result[0]
+    return wrapper
+
 
 @mcp.tool()
+@execute_on_main_thread
 def get_bytes(ea: int, size: int) -> List[int]:
     """Get bytes at specified address.
 
@@ -47,6 +69,7 @@ def get_bytes(ea: int, size: int) -> List[int]:
 
 
 @mcp.tool()
+@execute_on_main_thread
 def get_disasm(ea: int) -> str:
     """Get disassembly at specified address.
 
@@ -57,6 +80,7 @@ def get_disasm(ea: int) -> str:
 
 
 @mcp.tool()
+@execute_on_main_thread
 def get_decompiled_func(ea: int) -> Dict[str, Any]:
     """Get decompiled pseudocode of function containing address.
 
@@ -78,6 +102,7 @@ def get_decompiled_func(ea: int) -> Dict[str, Any]:
 
 
 @mcp.tool()
+@execute_on_main_thread
 def get_function_name(ea: int) -> str:
     """Get function name at specified address.
 
@@ -88,6 +113,7 @@ def get_function_name(ea: int) -> str:
 
 
 @mcp.tool()
+@execute_on_main_thread
 def get_segments() -> List[Dict[str, Any]]:
     """Get all segments information.
 
@@ -118,6 +144,7 @@ def get_segments() -> List[Dict[str, Any]]:
 
 
 @mcp.tool()
+@execute_on_main_thread
 def get_functions() -> List[Dict[str, Any]]:
     """Get all functions in the binary."""
     functions = []
@@ -128,6 +155,7 @@ def get_functions() -> List[Dict[str, Any]]:
 
 
 @mcp.tool()
+@execute_on_main_thread
 def get_xrefs_to(ea: int) -> List[Dict[str, Any]]:
     """Get all cross references to specified address.
 
@@ -141,6 +169,7 @@ def get_xrefs_to(ea: int) -> List[Dict[str, Any]]:
 
 
 @mcp.tool()
+@execute_on_main_thread
 def get_imports() -> dict[str, list[tuple[int, str, int]]]:
     """Get all imports in the binary.
 
@@ -178,6 +207,7 @@ def get_imports() -> dict[str, list[tuple[int, str, int]]]:
 
 
 @mcp.tool()
+@execute_on_main_thread
 def get_exports() -> List[Tuple[int, int, int, str]]:
     """Get all exports in the binary.
 
@@ -187,72 +217,84 @@ def get_exports() -> List[Tuple[int, int, int, str]]:
 
 
 @mcp.tool()
+@execute_on_main_thread
 def get_entry_point() -> int:
     """Get the entry point of the binary."""
     return get_exports()[0]
 
 
 @mcp.tool()
+@execute_on_main_thread
 def make_function(ea: int) -> None:
     """Make a function at specified address."""
     ida_funcs.add_func(ea)
 
 
 @mcp.tool()
+@execute_on_main_thread
 def undefine_function(ea: int) -> None:
     """Undefine a function at specified address."""
     ida_funcs.del_func(ea)
 
 
 @mcp.tool()
+@execute_on_main_thread
 def get_dword_at(ea: int) -> int:
     """Get the dword at specified address."""
     return idc.get_dword(ea)
 
 
 @mcp.tool()
+@execute_on_main_thread
 def get_word_at(ea: int) -> int:
     """Get the word at specified address."""
     return idc.get_word(ea)
 
 
 @mcp.tool()
+@execute_on_main_thread
 def get_byte_at(ea: int) -> int:
     """Get the byte at specified address."""
     return idc.get_byte(ea)
 
 
 @mcp.tool()
+@execute_on_main_thread
 def get_qword_at(ea: int) -> int:
     """Get the qword at specified address."""
     return idc.get_qword(ea)
 
 
 @mcp.tool()
+@execute_on_main_thread
 def get_float_at(ea: int) -> float:
     """Get the float at specified address."""
     return idc.get_float(ea)
 
 
 @mcp.tool()
+@execute_on_main_thread
 def get_double_at(ea: int) -> float:
     """Get the double at specified address."""
     return idc.get_double(ea)
 
 
 @mcp.tool()
+@execute_on_main_thread
 def get_string_at(ea: int) -> str:
     """Get the string at specified address."""
     return idc.get_strlit_contents(ea)
 
 
 @mcp.tool()
+@execute_on_main_thread
 def get_string_list() -> List[str]:
     """Get all strings in the binary."""
     return idc.get_strlist()
 
 
 @mcp.tool()
+@execute_on_main_thread
 def get_strings():
     strings = []
     for s in idautils.Strings():
