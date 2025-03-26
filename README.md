@@ -42,7 +42,7 @@ Add the following configuration to the `mcp.json` file in Claude or VSCode:
   "mcpServers": {
     "IDAPro": {
       "url": "http://127.0.0.1:3000/sse",
-      "env": {}
+      "type": "sse"
     }
   }
 }
