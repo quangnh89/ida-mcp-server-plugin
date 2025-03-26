@@ -1,3 +1,6 @@
+import glob
+import json
+import os
 import ida_bytes
 import ida_ua
 import ida_funcs
@@ -288,19 +291,76 @@ def get_string_at(ea: int) -> str:
 
 @mcp.tool()
 @execute_on_main_thread
-def get_string_list() -> List[str]:
-    """Get all strings in the binary."""
-    return idc.get_strlist()
-
-
-@mcp.tool()
-@execute_on_main_thread
 def get_strings():
     strings = []
     for s in idautils.Strings():
         strings.append({"address": s.ea, "string": str(s)})
     return strings
 
+@mcp.tool()
+@execute_on_main_thread
+def get_current_file_path():
+    return idc.get_input_file_path()
+
+@mcp.tool()
+@execute_on_main_thread
+def list_files_with_relative_path(relative_path: str = ""):
+    base_dir = os.path.dirname(idc.get_input_file_path())
+    if  ':' in relative_path or '..' in relative_path or '//' in relative_path:
+        return json.dumps({"error": "Invalid relative path"})
+    if relative_path is None or relative_path == "":
+        return glob.glob(os.path.join(base_dir, "*"))
+    else:
+        return glob.glob(os.path.join(base_dir, relative_path, "*"))
+
+@mcp.tool()
+@execute_on_main_thread
+def read_file(relative_path: str):
+    base_dir = os.path.dirname(idc.get_input_file_path())
+    if  ':' in relative_path or '..' in relative_path or '//' in relative_path:
+        return json.dumps({"error": "Invalid relative path"})
+    if relative_path is "":
+        return json.dumps({"error": "Relative path is required"})
+    with open(os.path.join(base_dir, relative_path), "r") as f:
+        return f.read()
+
+@mcp.tool()
+@execute_on_main_thread
+def write_file(relative_path: str, content: str):
+    base_dir = os.path.dirname(idc.get_input_file_path())
+    if  ':' in relative_path or '..' in relative_path or '//' in relative_path:
+        return json.dumps({"error": "Invalid relative path"})
+    if relative_path is "":
+        return json.dumps({"error": "Relative path is required"})
+    with open(os.path.join(base_dir, relative_path), "w") as f:
+        f.write(content)
+
+@mcp.tool()
+@execute_on_main_thread
+def read_binary(relative_path: str):
+    base_dir = os.path.dirname(idc.get_input_file_path())
+    if  ':' in relative_path or '..' in relative_path or '//' in relative_path:
+        return json.dumps({"error": "Invalid relative path"})
+    if relative_path is "":
+        return json.dumps({"error": "Relative path is required"})
+    with open(os.path.join(base_dir, relative_path), "rb") as f:
+        return f.read()
+
+@mcp.tool()
+@execute_on_main_thread
+def write_binary(relative_path: str , content: bytes):
+    base_dir = os.path.dirname(idc.get_input_file_path())
+    if  ':' in relative_path or '..' in relative_path or '//' in relative_path:
+        return json.dumps({"error": "Invalid relative path"})
+    if relative_path is "":
+        return json.dumps({"error": "Relative path is required"})
+    with open(os.path.join(base_dir, relative_path), "wb") as f:
+        f.write(content)    
+
+@mcp.tool()
+@execute_on_main_thread
+def eval_pythoni(script: str):
+    return eval(script)
 
 @mcp.prompt()
 def binary_analysis_strategy() -> str:
@@ -329,6 +389,14 @@ def binary_analysis_strategy() -> str:
         "- get_float_at: Get the float at specified address.\n"
         "- get_double_at: Get the double at specified address.\n"
         "- get_string_at: Get the string at specified address.\n"
+        "- get_strings: Get all strings in the binary.\n"
+        "- get_current_file_path: Get the current path of the binary.\n"
+        "- list_files_with_relative_path: List all files in the specified relative path in the current directory.\n"
+        "- read_file: Read the content of a file.\n"
+        "- write_file: Write content to a file.\n"
+        "- read_binary: Read the content of a binary file.\n"
+        "- write_binary: Write content to a binary file.\n"
+        "- eval_python: Evaluate a Python script in IDA Pro.\n"
         "Best Practices: \n"
         "- Initial Analysis Phase\n"
         "   1. Examine the Entry Point\n"
@@ -374,11 +442,19 @@ def binary_analysis_strategy() -> str:
         "       - Identify encryption and decryption functions\n"
         "       - Look for hardcoded keys and cryptographic constants\n"
         "       - Analyze how data is processed in memory\n"
-        "   9. Document Analysis Results\n"
+        "   9. Analyze Network Communication\n"
+        "       - Identify network communication functions\n"
+        "       - Look for IP addresses, URLs, and domain names\n"
+        "       - Analyze how data is sent and received over the network\n"
+        "   10. Dump payloads if there is any decryption or encoding\n"
+        "       - Generate decryption or decodeing script in python and ida python\n"
+        "       - Use eval_python to execute the script in IDA Pro\n"
+        "       - Dump payloads in the current directory\n"
+        "   11. Document Analysis Results\n"
         "       - Add comments to key functions\n"
         "       - Rename functions to reflect their actual functionality\n"
         "       - Create a logical structure diagram of the code\n"
-        "   10. Using Advanced Techniques\n"
+        "   12. Using Advanced Techniques\n"
         "       - Use IDA Pro's advanced features like IDAPython scripting, IDA SDK, and IDA API\n"
         "       - Implement custom analysis scripts to automate repetitive tasks\n"
         "       - Explore IDA Pro's plugin ecosystem for additional analysis capabilities\n"
