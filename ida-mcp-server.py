@@ -372,6 +372,33 @@ def write_binary(relative_path: str , content: bytes):
 def eval_pythoni(script: str):
     return eval(script)
 
+@mcp.tool()
+@execute_on_main_thread
+def get_instruction_length(address: int) -> int:
+    """
+    Retrieves the length (in bytes) of the instruction at the specified address.
+
+    Args:
+        address: The address of the instruction.
+
+    Returns:
+        The length (in bytes) of the instruction.  Returns 0 if the instruction cannot be decoded.
+    """
+    try:
+        # Create an insn_t object to store instruction information.
+        insn = ida_ua.insn_t()
+
+        # Decode the instruction.
+        length = ida_ua.decode_insn(insn, address)
+        if length == 0:
+            print(f"Failed to decode instruction at address {hex(address)}")
+            return 0
+
+        return length
+    except Exception as e:
+        print(f"Error getting instruction length: {str(e)}")
+        return 0
+
 @mcp.prompt()
 def binary_analysis_strategy() -> str:
     """
@@ -407,6 +434,7 @@ def binary_analysis_strategy() -> str:
         "- read_binary: Read the content of a binary file.\n"
         "- write_binary: Write content to a binary file.\n"
         "- eval_python: Evaluate a Python script in IDA Pro.\n"
+        "- get_instruction_length: Get the length of the instruction at the specified address.\n"
         "Best Practices: \n"
         "- Initial Analysis Phase\n"
         "   1. Examine the Entry Point\n"
