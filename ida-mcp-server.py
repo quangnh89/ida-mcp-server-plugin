@@ -223,7 +223,17 @@ def get_exports() -> List[Tuple[int, int, int, str]]:
 @execute_on_main_thread
 def get_entry_point() -> int:
     """Get the entry point of the binary."""
-    return get_exports()[0]
+    try:
+        import ida_ida
+        return ida_ida.inf_get_start_ea()
+    except (ImportError, AttributeError):
+        try:
+            # Alternative method: idc.get_inf_attr to get
+            import idc
+            return idc.get_inf_attr(idc.INF_START_EA)
+        except (ImportError, AttributeError):
+            # Last alternative method: use cvar.inf
+            return idaapi.cvar.inf.start_ea
 
 
 @mcp.tool()
