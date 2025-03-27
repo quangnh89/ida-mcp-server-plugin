@@ -17,6 +17,7 @@ This server provides a series of tools that allow AI assistants to perform the f
 - Define/undefine functions
 - Get various data types (dword, word, byte, qword, float, double, string)
 - Get all strings in the binary file
+- Get the length of the instruction at the specified address
 
 ## Installation
 
