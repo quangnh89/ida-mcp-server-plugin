@@ -1,3 +1,5 @@
+[![MseeP.ai Security Assessment Badge](https://mseep.net/pr/taida957789-ida-mcp-server-plugin-badge.png)](https://mseep.ai/app/taida957789-ida-mcp-server-plugin)
+
 # IDA Pro MCP Server
 
 IDA Pro MCP Server is a plugin that allows remote querying and control of IDA Pro through the Model Context Protocol (MCP) interface. This plugin enables AI assistants (such as Claude) to interact directly with IDA Pro for binary analysis tasks.
