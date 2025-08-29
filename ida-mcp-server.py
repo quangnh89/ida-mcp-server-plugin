@@ -1,53 +1,52 @@
 import glob
 import json
 import os
-import ida_bytes
-import ida_ua
-import ida_funcs
-import ida_hexrays
-import ida_name
-import ida_segment
-import idautils
-import idc
-import ida_idaapi
-import ida_kernwin
-import idaapi
 import threading
+try:
+    import ida_bytes
+    import ida_ua
+    import ida_funcs
+    import ida_hexrays
+    import ida_name
+    import ida_segment
+    import idautils
+    import idc
+    import ida_idaapi
+    import ida_kernwin
+    import idaapi
+except ImportError:
+    print("This script must be run within IDA Pro with Python support.")
+    raise
 
 from typing import Dict, List, Optional, Any, Tuple
-from datetime import datetime
 from functools import wraps
 from starlette.middleware import Middleware
 from starlette.middleware.cors import CORSMiddleware
 from starlette.applications import Starlette
-from starlette.requests import Request
-from starlette.routing import Mount, Route
-from starlette.responses import Response
+from starlette.routing import Mount
 from mcp.server import Server
-from mcp.server.sse import SseServerTransport
-from mcp.server import FastMCP
-import uvicorn
+from fastmcp import FastMCP
 
 
 # Initialize FastMCP server for IDA tools
 mcp = FastMCP("IDA MCP Server", port=3000)
 
-# 封裝函數執行在主線程的裝飾器
+# Decorator that encapsulates function execution in the main thread
 def execute_on_main_thread(f):
     @wraps(f)
     def wrapper(*args, **kwargs):
         result = []
         exception = []
-        
+
         def run_function():
             try:
                 result.append(f(*args, **kwargs))
             except Exception as e:
                 exception.append(e)
             return 0
-        
+
         ida_kernwin.execute_sync(run_function, ida_kernwin.MFF_FAST)
-        
+
         if exception:
             raise exception[0]
         return result[0]
@@ -64,8 +63,7 @@ def get_bytes(ea: int, size: int) -> List[int]:
         size: Number of bytes to read
     """
     try:
-        result = [ida_bytes.get_byte(ea + i) for i in range(size)]
-        return result
+        return [ida_bytes.get_byte(ea + i) for i in range(size)]
     except Exception as e:
         print(f"Error in get_bytes: {str(e)}")
         return {"error": str(e)}
@@ -365,7 +363,7 @@ def write_binary(relative_path: str , content: bytes):
     if relative_path is "":
         return json.dumps({"error": "Relative path is required"})
     with open(os.path.join(base_dir, relative_path), "wb") as f:
-        f.write(content)    
+        f.write(content)
 
 @mcp.tool()
 @execute_on_main_thread
