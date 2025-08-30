@@ -1,7 +1,13 @@
+# IDA MCP Server Plugin
+# A plugin for IDA Pro that provides a Model Context Protocol (MCP) server
+
+# pylint: disable=broad-exception-caught
+
 import glob
 import json
 import os
 import threading
+
 try:
     import ida_bytes
     import ida_ua
@@ -26,13 +32,14 @@ from starlette.applications import Starlette
 from starlette.routing import Mount
 from mcp.server import Server
 from fastmcp import FastMCP
+from pathvalidate import sanitize_filepath
 
 
 # Initialize FastMCP server for IDA tools
 mcp = FastMCP("IDA MCP Server", port=3000)
 
-# Decorator that encapsulates function execution in the main thread
 def execute_on_main_thread(f):
+    """Decorator to ensure the function runs on IDA's main thread."""
     @wraps(f)
     def wrapper(*args, **kwargs):
         result = []
@@ -91,11 +98,11 @@ def get_decompiled_func(ea: int) -> Dict[str, Any]:
     try:
         func = ida_funcs.get_func(ea)
         if not func:
-            return {"error": "No function found at address"}
+            return {"error": f"No function found at address 0x{ea:08X}"}
 
         decompiler = ida_hexrays.decompile(func.start_ea)
         if not decompiler:
-            return {"error": "Failed to decompile function"}
+            return {"error": "Failed to decompile function at address 0x{ea:08X}"}
 
         return {"code": str(decompiler)}
     except Exception as e:
@@ -109,8 +116,24 @@ def get_function_name(ea: int) -> str:
 
     Args:
         ea: Effective address of the function
+    Returns:
+        Name of the function or empty string if not found
     """
     return ida_name.get_name(ea)
+
+
+@mcp.tool()
+@execute_on_main_thread
+def get_function_by_name(name: str) -> int:
+    """Get function address by name.
+
+    Args:
+        name: Name of the function
+    Returns:
+        Address of the function or idaapi.BADADDR if not found
+    """
+    function_address = idaapi.get_name_ea(idaapi.BADADDR, name)
+    return function_address
 
 
 @mcp.tool()
@@ -220,7 +243,11 @@ def get_exports() -> List[Tuple[int, int, int, str]]:
 @mcp.tool()
 @execute_on_main_thread
 def get_entry_point() -> List[int]:
-    """Get a list of entry point of the binary."""
+    """
+    Get a list of entry point of the binary.
+    Returns:
+        A list of entry point addresses.
+    """
     try:
         import ida_entry
         entry_list = []
@@ -243,16 +270,20 @@ def get_entry_point() -> List[int]:
 
 @mcp.tool()
 @execute_on_main_thread
-def make_function(ea: int) -> None:
+def make_function(ea1: int, ea2: int = ida_idaapi.BADADDR) -> str:
     """Make a function at specified address."""
-    ida_funcs.add_func(ea)
+    if ida_funcs.add_func(ea1, ea2):
+        return "Function created successfully at address 0x{ea1:08X}"
+    return "Failed to create function at address 0x{ea1:08X}"
 
 
 @mcp.tool()
 @execute_on_main_thread
-def undefine_function(ea: int) -> None:
+def undefine_function(ea: int) -> str:
     """Undefine a function at specified address."""
-    ida_funcs.del_func(ea)
+    if ida_funcs.del_func(ea):
+        return "Function undefined successfully at address 0x{ea:08X}"
+    return "Failed to undefine function at address 0x{ea:08X}"
 
 
 @mcp.tool()
@@ -306,7 +337,8 @@ def get_string_at(ea: int) -> str:
 
 @mcp.tool()
 @execute_on_main_thread
-def get_strings():
+def get_strings() -> List[Dict[str, Any]]:
+    """Get all strings in the binary."""
     strings = []
     for s in idautils.Strings():
         strings.append({"address": s.ea, "string": str(s)})
@@ -314,68 +346,254 @@ def get_strings():
 
 @mcp.tool()
 @execute_on_main_thread
-def get_current_file_path():
+def get_current_file_path() -> str:
+    """
+    Get the current path of the binary.
+    Returns:
+        The current file path of the binary.
+    """
     return idc.get_input_file_path()
 
 @mcp.tool()
 @execute_on_main_thread
+def get_metadata() -> Dict[str, Any]:
+    """
+    Get metadata about the current binary.
+    Returns:
+        A dictionary containing metadata such as file path, architecture, bitness, and entry point.
+    """
+    try:
+        import ida_nalt
+
+        info = idaapi.get_inf_structure()
+        if info.is_64bit():
+            bits = 64
+        elif info.is_32bit():
+            bits = 32
+        else:
+            bits = 16
+
+        endian = "big" if info.is_be() else "little"
+
+        try:
+            # https://www.hex-rays.com/products/ida/support/sdkdoc/structidainfo.html
+            info = idaapi.get_inf_structure()
+            omin_ea = info.omin_ea
+            omax_ea = info.omax_ea
+        except AttributeError:
+            import ida_ida
+            omin_ea = ida_ida.inf_get_omin_ea()
+            omax_ea = ida_ida.inf_get_omax_ea()
+        # Bad heuristic for image size (bad if the relocations are the last section)
+        image_size = omax_ea - omin_ea
+
+        metadata = {
+            "file_path": idc.get_input_file_path(),
+            "module_name": idaapi.get_root_filename(),
+            "file_size": ida_nalt.retrieve_input_file_size(),
+            "md5": ida_nalt.retrieve_input_file_md5(),
+            "sha256": ida_nalt.retrieve_input_file_sha256(),
+            "crc32": ida_nalt.retrieve_input_file_crc32(),
+            "image_size": image_size,
+            "image_base": idaapi.get_imagebase(),
+            "compiler": ida_nalt.get_compiler_name(),
+            "architecture": info.procname,
+            "bits": bits,
+            "endian": endian,
+        }
+
+        return metadata
+    except Exception as e:
+        return {"error": str(e)}
+
+
+
+def refresh_decompiler_ctext(function_address: int):
+    error = ida_hexrays.hexrays_failure_t()
+    cfunc: ida_hexrays.cfunc_t = ida_hexrays.decompile_func(function_address, error, ida_hexrays.DECOMP_WARNINGS)
+    if cfunc:
+        cfunc.refresh_func_ctext()
+
+
+@mcp.tool()
+@execute_on_main_thread
+def rename_local_variable(func_ea: int, old_name: str, new_name: str) -> str:
+    """
+    Rename a local variable in a function.
+
+    Args:
+        func_ea: Effective address of the function containing the local variable.
+        old_name: Current name of the variable.
+        new_name: New name for the variable (empty for a default name).
+
+    Returns:
+        A message indicating success or failure.
+    """
+    try:
+        func = idaapi.get_func(func_ea)
+        if not func:
+            return f"No function found at address 0x{func_ea:08X}"
+        if not ida_hexrays.rename_lvar(func.start_ea, old_name, new_name):
+            return f"Failed to rename local variable '{old_name}' in function at address 0x{func_ea:08X}"
+        refresh_decompiler_ctext(func.start_ea)
+        return f"Local variable '{old_name}' renamed to '{new_name}'"
+    except Exception as e:
+        return f"Error renaming local variable: {str(e)}"
+
+
+@mcp.tool()
+@execute_on_main_thread
+def rename_global_variable(old_name: str, new_name: str) -> str:
+    """
+    Rename a global variable.
+
+    Args:
+        old_name: Current name of the global variable.
+        new_name: New name for the global variable (empty for a default name).
+
+    Returns:
+        A message indicating success or failure.
+    """
+    try:
+        ea = idaapi.get_name_ea(idaapi.BADADDR, old_name)
+        if ea == idaapi.BADADDR:
+            return f"No global variable found with name '{old_name}'"
+        if not ida_name.set_name(ea, new_name, ida_name.SN_CHECK):
+            return f"Failed to rename global variable '{old_name}'"
+        refresh_decompiler_ctext(ea)
+        return f"Global variable '{old_name}' renamed to '{new_name}'"
+    except Exception as e:
+        return f"Error renaming global variable: {str(e)}"
+
+
+@mcp.tool()
+@execute_on_main_thread
+def set_global_variable_name(ea: int, new_name: str) -> str:
+    """
+    Set the name of a global variable at a specific address.
+
+    Args:
+        ea: Effective address of the global variable.
+        new_name: New name for the global variable (empty for a default name).
+
+    Returns:
+        A message indicating success or failure.
+    """
+    try:
+        if not ida_name.set_name(ea, new_name, ida_name.SN_CHECK):
+            return f"Failed to set name for global variable at address 0x{ea:08X}"
+        refresh_decompiler_ctext(ea)
+        return f"Global variable at address 0x{ea:08X} renamed to '{new_name}'"
+    except Exception as e:
+        return f"Error setting global variable name: {str(e)}"
+
+
+@mcp.tool()
+@execute_on_main_thread
 def list_files_with_relative_path(relative_path: str = ""):
+    """
+    List all files in the specified relative path in the current directory.
+    Args:
+        relative_path: Relative path to list files from the current binary's directory.
+                       If empty, lists files in the current binary's directory.
+    Returns:
+        A list of file paths.
+    """
     base_dir = os.path.dirname(idc.get_input_file_path())
     if  ':' in relative_path or '..' in relative_path or '//' in relative_path:
         return json.dumps({"error": "Invalid relative path"})
+
     if relative_path is None or relative_path == "":
         return glob.glob(os.path.join(base_dir, "*"))
     else:
-        return glob.glob(os.path.join(base_dir, relative_path, "*"))
+        target_path = os.path.join(base_dir, relative_path)
+        target_path = sanitize_filepath(target_path)
+        return glob.glob(os.path.join(target_path, "*"))
 
 @mcp.tool()
 @execute_on_main_thread
-def read_file(relative_path: str):
+def read_file(relative_path: str, encoding: str = None) -> Any:
+    """
+    Read the content of a file.
+    Args:
+        relative_path: Relative path to the file from the current binary's directory.
+        encoding: Encoding to use when reading the file. If None, the default system encoding is used.
+    Returns:
+        The content of the file.
+    """
     base_dir = os.path.dirname(idc.get_input_file_path())
     if  ':' in relative_path or '..' in relative_path or '//' in relative_path:
         return json.dumps({"error": "Invalid relative path"})
     if relative_path is "":
         return json.dumps({"error": "Relative path is required"})
-    with open(os.path.join(base_dir, relative_path), "r") as f:
+    target_path = os.path.join(base_dir, relative_path)
+    target_path = sanitize_filepath(target_path)
+    with open(target_path, "r", encoding=encoding) as f:
         return f.read()
 
 @mcp.tool()
 @execute_on_main_thread
-def write_file(relative_path: str, content: str):
+def write_file(relative_path: str, content: str, encoding: str = None) -> None:
+    """
+    Write content to a file.
+    Args:
+        relative_path: Relative path to the file from the current binary's directory.
+        content: Content to write to the file.
+        encoding: Encoding to use when writing the file. If None, the default system encoding is used.
+    Returns:
+        None
+    """
     base_dir = os.path.dirname(idc.get_input_file_path())
     if  ':' in relative_path or '..' in relative_path or '//' in relative_path:
         return json.dumps({"error": "Invalid relative path"})
     if relative_path is "":
         return json.dumps({"error": "Relative path is required"})
-    with open(os.path.join(base_dir, relative_path), "w") as f:
+    target_path = os.path.join(base_dir, relative_path)
+    target_path = sanitize_filepath(target_path)
+    with open(target_path, "w", encoding=encoding) as f:
         f.write(content)
 
 @mcp.tool()
 @execute_on_main_thread
-def read_binary(relative_path: str):
+def read_binary(relative_path: str) -> bytes:
+    """
+    Read the content of a binary file.
+    Args:
+        relative_path: Relative path to the file from the current binary's directory.
+    Returns:
+        The binary content of the file.
+    """
     base_dir = os.path.dirname(idc.get_input_file_path())
     if  ':' in relative_path or '..' in relative_path or '//' in relative_path:
         return json.dumps({"error": "Invalid relative path"})
     if relative_path is "":
         return json.dumps({"error": "Relative path is required"})
-    with open(os.path.join(base_dir, relative_path), "rb") as f:
+    target_path = os.path.join(base_dir, relative_path)
+    target_path = sanitize_filepath(target_path)
+    with open(target_path, "rb") as f:
         return f.read()
 
 @mcp.tool()
 @execute_on_main_thread
-def write_binary(relative_path: str , content: bytes):
+def write_binary(relative_path: str , content: bytes) -> None:
+    """
+    Write content to a binary file.
+    Args:
+        relative_path: Relative path to the file from the current binary's directory.
+        content: Binary content to write to the file.
+    Returns:
+        None
+    """
     base_dir = os.path.dirname(idc.get_input_file_path())
     if  ':' in relative_path or '..' in relative_path or '//' in relative_path:
         return json.dumps({"error": "Invalid relative path"})
     if relative_path is "":
         return json.dumps({"error": "Relative path is required"})
-    with open(os.path.join(base_dir, relative_path), "wb") as f:
+    target_path = os.path.join(base_dir, relative_path)
+    target_path = sanitize_filepath(target_path)
+    with open(target_path, "wb") as f:
         f.write(content)
 
-@mcp.tool()
-@execute_on_main_thread
-def eval_pythoni(script: str):
-    return eval(script)
 
 @mcp.tool()
 @execute_on_main_thread
@@ -403,6 +621,7 @@ def get_instruction_length(address: int) -> int:
     except Exception as e:
         print(f"Error getting instruction length: {str(e)}")
         return 0
+
 
 @mcp.prompt()
 def binary_analysis_strategy() -> str:
@@ -505,7 +724,7 @@ def binary_analysis_strategy() -> str:
 
 
 def create_starlette_app(mcp_server: Server, *, debug: bool = False) -> Starlette:
-    """Create a Starlette application that can serve the provided mcp server with SSE."""
+    """Create a Starlette application that can serve the provided mcp server."""
 
     middleware = [
         Middleware(
@@ -519,12 +738,15 @@ def create_starlette_app(mcp_server: Server, *, debug: bool = False) -> Starlett
         debug=debug,
         middleware=middleware,
         routes=[
-            Mount("/", app=mcp.sse_app()),
+            Mount("/", app=mcp_server.http_app()),
         ],
     )
 
 
 class ModelContextProtocolPlugin(ida_idaapi.plugin_t):
+    """
+    MCP IDA Pro Plugin server
+    """
     flags = ida_idaapi.PLUGIN_FIX | ida_idaapi.PLUGIN_HIDE
     comment = "IDA Model Context Protocol Server"
     help = "Provides REST API and SSE for IDA Pro analysis"
@@ -532,6 +754,7 @@ class ModelContextProtocolPlugin(ida_idaapi.plugin_t):
     wanted_hotkey = ""
 
     def init(self):
+        """Initialize the plugin and start the MCP server."""
         try:
             print("Initializing IDA Model Context Protocol Server...")
             # app = create_starlette_app(mcp, debug=True)
