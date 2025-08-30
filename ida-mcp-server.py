@@ -539,7 +539,7 @@ class ModelContextProtocolPlugin(ida_idaapi.plugin_t):
             def run_server():
                 try:
                     # 設置將異常轉換為 JSON 響應
-                    mcp.run(transport="sse")
+                    mcp.run(transport="streamable-http")
                     # uvicorn.run(app, host="localhost", port=3000, log_level="debug")
                 except Exception as e:
                     print(f"Server error: {str(e)}")
@@ -547,7 +547,7 @@ class ModelContextProtocolPlugin(ida_idaapi.plugin_t):
             server_thread = threading.Thread(target=run_server)
             server_thread.daemon = True
             server_thread.start()
-            print("Server started successfully!")
+            print("Server started successfully! serve at http://localhost:3000/mcp")
             return ida_idaapi.PLUGIN_KEEP
         except Exception as e:
             print(f"Failed to start server: {str(e)}")
