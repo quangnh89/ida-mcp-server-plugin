@@ -18,7 +18,7 @@ except ImportError:
     print("This script must be run within IDA Pro with Python support.")
     raise
 
-from typing import Dict, List, Optional, Any, Tuple
+from typing import Dict, List, Any, Tuple
 from functools import wraps
 from starlette.middleware import Middleware
 from starlette.middleware.cors import CORSMiddleware
@@ -192,8 +192,8 @@ def get_imports() -> dict[str, list[tuple[int, str, int]]]:
         # Create a list for imported names
         items = []
 
-        def imports_names_cb(ea, name, ord):
-            items.append((ea, "" if not name else name, ord))
+        def imports_names_cb(ea, name, ordinal):
+            items.append((ea, "" if not name else name, ordinal))
             # True -> Continue enumeration
             return True
 
@@ -219,19 +219,26 @@ def get_exports() -> List[Tuple[int, int, int, str]]:
 
 @mcp.tool()
 @execute_on_main_thread
-def get_entry_point() -> int:
-    """Get the entry point of the binary."""
+def get_entry_point() -> List[int]:
+    """Get a list of entry point of the binary."""
     try:
-        import ida_ida
-        return ida_ida.inf_get_start_ea()
+        import ida_entry
+        entry_list = []
+        qty = ida_entry.get_entry_qty()
+        for i in range(qty):
+            ord_i = ida_entry.get_entry_ordinal(i)
+            entry_list.append(ida_entry.get_entry(ord_i))
+        return entry_list
     except (ImportError, AttributeError):
         try:
             # Alternative method: idc.get_inf_attr to get
             import idc
-            return idc.get_inf_attr(idc.INF_START_EA)
+            return [idc.get_inf_attr(idc.INF_START_EA)]
         except (ImportError, AttributeError):
             # Last alternative method: use cvar.inf
-            return idaapi.cvar.inf.start_ea
+            return [idaapi.cvar.inf.start_ea]
+    except Exception:
+        return []
 
 
 @mcp.tool()
