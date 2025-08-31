@@ -1,5 +1,8 @@
-# IDA MCP Server Plugin
-# A plugin for IDA Pro that provides a Model Context Protocol (MCP) server
+"""
+IDA MCP Server Plugin
+A plugin for IDA Pro that provides a Model Context Protocol (MCP) server for
+interacting with IDA Pro via streamable-http.
+"""
 
 # pylint: disable=broad-exception-caught
 
@@ -20,6 +23,7 @@ try:
     import ida_idaapi
     import ida_kernwin
     import idaapi
+    import ida_typeinf
 except ImportError:
     print("This script must be run within IDA Pro with Python support.")
     raise
@@ -58,6 +62,89 @@ def execute_on_main_thread(f):
             raise exception[0]
         return result[0]
     return wrapper
+
+
+def get_type_by_name(type_name: str) -> ida_typeinf.tinfo_t:
+    """Get IDA type by name, including standard types.
+    Args:
+        type_name: Name of the type to retrieve
+    Returns:
+        ida_typeinf.tinfo_t object or None if not found
+    """
+    # 8-bit integers
+    if type_name in ('int8', '__int8', 'int8_t', 'char', 'signed char'):
+        return ida_typeinf.tinfo_t(ida_typeinf.BTF_INT8)
+    elif type_name in ('uint8', '__uint8', 'uint8_t', 'unsigned char', 'byte', 'BYTE'):
+        return ida_typeinf.tinfo_t(ida_typeinf.BTF_UINT8)
+
+    # 16-bit integers
+    elif type_name in ('int16', '__int16', 'int16_t', 'short', 'short int', 'signed short', 'signed short int'):
+        return ida_typeinf.tinfo_t(ida_typeinf.BTF_INT16)
+    elif type_name in ('uint16', '__uint16', 'uint16_t', 'unsigned short', 'unsigned short int', 'word', 'WORD'):
+        return ida_typeinf.tinfo_t(ida_typeinf.BTF_UINT16)
+
+    # 32-bit integers
+    elif type_name in ('int32', '__int32', 'int32_t', 'int', 'signed int', 'long', 'long int', 'signed long', 'signed long int'):
+        return ida_typeinf.tinfo_t(ida_typeinf.BTF_INT32)
+    elif type_name in ('uint32', '__uint32', 'uint32_t', 'unsigned int', 'unsigned long', 'unsigned long int', 'dword', 'DWORD'):
+        return ida_typeinf.tinfo_t(ida_typeinf.BTF_UINT32)
+
+    # 64-bit integers
+    elif type_name in ('int64', '__int64', 'int64_t', 'long long', 'long long int', 'signed long long', 'signed long long int'):
+        return ida_typeinf.tinfo_t(ida_typeinf.BTF_INT64)
+    elif type_name in ('uint64', '__uint64', 'uint64_t', 'unsigned int64', 'unsigned long long', 'unsigned long long int', 'qword', 'QWORD'):
+        return ida_typeinf.tinfo_t(ida_typeinf.BTF_UINT64)
+
+    # 128-bit integers
+    elif type_name in ('int128', '__int128', 'int128_t', '__int128_t'):
+        return ida_typeinf.tinfo_t(ida_typeinf.BTF_INT128)
+    elif type_name in ('uint128', '__uint128', 'uint128_t', '__uint128_t', 'unsigned int128'):
+        return ida_typeinf.tinfo_t(ida_typeinf.BTF_UINT128)
+
+    # Floating point types
+    elif type_name in ('float', ):
+        return ida_typeinf.tinfo_t(ida_typeinf.BTF_FLOAT)
+    elif type_name in ('double', ):
+        return ida_typeinf.tinfo_t(ida_typeinf.BTF_DOUBLE)
+    elif type_name in ('long double', 'ldouble'):
+        return ida_typeinf.tinfo_t(ida_typeinf.BTF_LDOUBLE)
+
+    # Boolean type
+    elif type_name in ('bool', '_Bool', 'boolean'):
+        return ida_typeinf.tinfo_t(ida_typeinf.BTF_BOOL)
+
+    # Void type
+    elif type_name in ('void', ):
+        return ida_typeinf.tinfo_t(ida_typeinf.BTF_VOID)
+
+    # If not a standard type, try to get a named type
+    tif = ida_typeinf.tinfo_t()
+    if tif.get_named_type(None, type_name, ida_typeinf.BTF_STRUCT):
+        return tif
+
+    if tif.get_named_type(None, type_name, ida_typeinf.BTF_TYPEDEF):
+        return tif
+
+    if tif.get_named_type(None, type_name, ida_typeinf.BTF_ENUM):
+        return tif
+
+    if tif.get_named_type(None, type_name, ida_typeinf.BTF_UNION):
+        return tif
+
+    if tif := ida_typeinf.tinfo_t(type_name):
+        return tif
+    return None
+
+
+def refresh_decompiler_ctext(function_address: int):
+    """Refresh the decompiler view for a function at the specified address.
+    Args:
+        function_address: Effective address of the function to refresh
+    """
+    error = ida_hexrays.hexrays_failure_t()
+    cfunc: ida_hexrays.cfunc_t = ida_hexrays.decompile_func(function_address, error, ida_hexrays.DECOMP_WARNINGS)
+    if cfunc:
+        cfunc.refresh_func_ctext()
 
 
 @mcp.tool()
@@ -407,14 +494,6 @@ def get_metadata() -> Dict[str, Any]:
         return {"error": str(e)}
 
 
-
-def refresh_decompiler_ctext(function_address: int):
-    error = ida_hexrays.hexrays_failure_t()
-    cfunc: ida_hexrays.cfunc_t = ida_hexrays.decompile_func(function_address, error, ida_hexrays.DECOMP_WARNINGS)
-    if cfunc:
-        cfunc.refresh_func_ctext()
-
-
 @mcp.tool()
 @execute_on_main_thread
 def rename_local_variable(func_ea: int, old_name: str, new_name: str) -> str:
@@ -486,6 +565,79 @@ def set_global_variable_name(ea: int, new_name: str) -> str:
         return f"Global variable at address 0x{ea:08X} renamed to '{new_name}'"
     except Exception as e:
         return f"Error setting global variable name: {str(e)}"
+
+
+@mcp.tool()
+@execute_on_main_thread
+def set_global_variable_type(variable_name: str, new_type: str) -> str:
+    """
+    Set the type of a global variable at a specific address.
+
+    Args:
+        variable_name: Name of the global variable.
+        new_name: New type for the variable.
+
+    Returns:
+        A message indicating success or failure.
+    """
+
+    ea = idaapi.get_name_ea(idaapi.BADADDR, variable_name)
+    tif = get_type_by_name(new_type)
+    if not tif:
+        return "Parsed declaration is not a variable type"
+    if not ida_typeinf.apply_tinfo(ea, tif, ida_typeinf.PT_SIL):
+        return "Failed to apply type"
+
+
+@mcp.tool()
+@execute_on_main_thread
+def set_function_name(ea: int, new_name: str) -> str:
+    """
+    Set the name of a function at a specific address.
+
+    Args:
+        ea: Effective address of the function.
+        new_name: New name for the function (empty for a default name).
+
+    Returns:
+        A message indicating success or failure.
+    """
+    try:
+        if not ida_name.set_name(ea, new_name, ida_name.SN_CHECK):
+            return f"Failed to set name for function at address 0x{ea:08X}"
+        refresh_decompiler_ctext(ea)
+        return f"Function at address 0x{ea:08X} renamed to '{new_name}'"
+    except Exception as e:
+        return f"Error setting function name at address 0x{ea:08X}: {str(e)}"
+
+
+@mcp.tool()
+@execute_on_main_thread
+def set_function_prototype(ea: int, prototype: str) -> str:
+    """
+    Set the prototype of a function at a specific address.
+
+    Args:
+        ea: Effective address of the function.
+        prototype: New function prototype.
+
+    Returns:
+        A message indicating success or failure.
+    """
+    try:
+        func = idaapi.get_func(ea)
+        if not func:
+            return f"No function found at address 0x{ea:08X}"
+
+        tif = ida_typeinf.tinfo_t(prototype, None, ida_typeinf.PT_SIL)
+        if not tif or not tif.is_func():
+            return "Parsed declaration is not a function type"
+        if not ida_typeinf.apply_tinfo(func.start_ea, tif, ida_typeinf.PT_SIL):
+            return "Failed to apply type"
+        refresh_decompiler_ctext(ea)
+        return f"Function type at address 0x{ea:08X} set to '{prototype}'"
+    except Exception as e:
+        return f"Error setting function type at address 0x{ea:08X}: {str(e)}"
 
 
 @mcp.tool()
@@ -628,99 +780,14 @@ def binary_analysis_strategy() -> str:
     """
     Guild for analyzing the binary
     """
-    return (
-        "IDA Pro MCP Server Tools and Best Practices:\n\n."
-        "Tools: \n"
-        "- get_bytes: Get bytes at specified address.\n"
-        "- get_disasm: Get disassembly at specified address.\n"
-        "- get_decompiled_func: Get decompiled pseudocode of function containing address.\n"
-        "- get_function_name: Get function name at specified address.\n"
-        "- get_segments: Get all segments information.\n"
-        "- get_functions: Get all functions in the binary.\n"
-        "- get_xrefs_to: Get all cross references to a specified address.\n"
-        "- get_imports: Get all imports in the binary.\n"
-        "- get_exports: Get all exports in the binary.\n"
-        "- get_entry_point: Get the entry point of the binary.\n"
-        "- make_function: Make a function at specified address.\n"
-        "- undefine_function: Undefine a function at specified address.\n"
-        "- get_dword_at: Get the dword at specified address.\n"
-        "- get_word_at: Get the word at specified address.\n"
-        "- get_byte_at: Get the byte at specified address.\n"
-        "- get_qword_at: Get the qword at specified address.\n"
-        "- get_float_at: Get the float at specified address.\n"
-        "- get_double_at: Get the double at specified address.\n"
-        "- get_string_at: Get the string at specified address.\n"
-        "- get_strings: Get all strings in the binary.\n"
-        "- get_current_file_path: Get the current path of the binary.\n"
-        "- list_files_with_relative_path: List all files in the specified relative path in the current directory.\n"
-        "- read_file: Read the content of a file.\n"
-        "- write_file: Write content to a file.\n"
-        "- read_binary: Read the content of a binary file.\n"
-        "- write_binary: Write content to a binary file.\n"
-        "- eval_python: Evaluate a Python script in IDA Pro.\n"
-        "- get_instruction_length: Get the length of the instruction at the specified address.\n"
-        "Best Practices: \n"
-        "- Initial Analysis Phase\n"
-        "   1. Examine the Entry Point\n"
-        "       - Use the get_entry_point() tool to locate the program's entry point\n"
-        "       - Analyze the code at the entry point to understand the program's startup flow\n"
-        "       - Look for unusual instructions or jumps\n"
-        "   2. Analyze Import Table\n"
-        "       - Use the get_imports() tool to view all imported functions\n"
-        "       - Look for suspicious API functions, such as:\n"
-        "           - File operations: CreateFile, WriteFile\n"
-        "           - Network communication: socket, connect, InternetOpen\n"
-        "           - Process manipulation: CreateProcess, VirtualAlloc\n"
-        "           - Registry operations: RegOpenKey, RegSetValue\n"
-        "           - Cryptography related: CryptEncrypt, CryptDecrypt\n"
-        "   3. Review Strings\n"
-        "       - Use the get_strings() tool to obtain all strings\n"
-        "       - Pay attention to IP addresses, URLs, domain names, file paths\n"
-        "       - Look for encrypted or obfuscated string patterns\n"
-        "       - Analyze command line parameters and error messages\n"
-        "   4. In-Depth Analysis Phase\n"
-        "       - Track Key API Calls\n"
-        "           - Use get_xrefs_to() to find cross-references to suspicious imported functions\n"
-        "           - Use get_decompiled_func() to analyze functions that call these APIs\n"
-        "           - Analyze how parameters and return values are handled\n"
-        "   5. Identify Main Functional Blocks\n"
-        "       - Use get_functions() to get a list of all functions\n"
-        "       - Sort functions by size and complexity\n"
-        "       - Decompile and analyze large, complex functions\n"
-        "       - Look for suspicious function names or unnamed functions\n"
-        "   6. Analyze Control Flow\n"
-        "       - Observe conditional branches and loop structures\n"
-        "       - Analyze function call graphs and execution paths\n"
-        "       - Look for anti-debugging and anti-VM detection techniques\n"
-        "       - Pay attention to unusual jumps and callback mechanisms\n"
-        "   7. Identifying Malicious Behaviors\n"
-        "       - Identify Common Malicious Functionality\n"
-        "           - Persistence mechanisms: Registry modifications, startup items, service creation\n"
-        "           - Data theft: File searching, keylogging, screen capturing\n"
-        "           - Communication features: C&C communication, data exfiltration channels\n"
-        "           - Evasion techniques: Obfuscation, packing, anti-analysis checks\n"
-        "           - Destructive behaviors: File encryption, system damage\n"
-        "   8. Analyze Algorithms and Encryption Routines\n"
-        "       - Identify encryption and decryption functions\n"
-        "       - Look for hardcoded keys and cryptographic constants\n"
-        "       - Analyze how data is processed in memory\n"
-        "   9. Analyze Network Communication\n"
-        "       - Identify network communication functions\n"
-        "       - Look for IP addresses, URLs, and domain names\n"
-        "       - Analyze how data is sent and received over the network\n"
-        "   10. Dump payloads if there is any decryption or encoding\n"
-        "       - Generate decryption or decodeing script in python and ida python\n"
-        "       - Use eval_python to execute the script in IDA Pro\n"
-        "       - Dump payloads in the current directory\n"
-        "   11. Document Analysis Results\n"
-        "       - Add comments to key functions\n"
-        "       - Rename functions to reflect their actual functionality\n"
-        "       - Create a logical structure diagram of the code\n"
-        "   12. Using Advanced Techniques\n"
-        "       - Use IDA Pro's advanced features like IDAPython scripting, IDA SDK, and IDA API\n"
-        "       - Implement custom analysis scripts to automate repetitive tasks\n"
-        "       - Explore IDA Pro's plugin ecosystem for additional analysis capabilities\n"
-    )
+    script_path = os.path.realpath(os.path.abspath(__file__))
+    script_dir = os.path.dirname(script_path)
+    guideline_path = os.path.join(script_dir, "binary_analysis_strategy.txt")
+    if os.path.exists(guideline_path):
+        with open(guideline_path, "r", encoding="utf-8") as f:
+            return f.read()
+    else:
+        return "Binary analysis strategy guideline file not found."
 
 
 def create_starlette_app(mcp_server: Server, *, debug: bool = False) -> Starlette:
@@ -761,7 +828,6 @@ class ModelContextProtocolPlugin(ida_idaapi.plugin_t):
 
             def run_server():
                 try:
-                    # 設置將異常轉換為 JSON 響應
                     mcp.run(transport="streamable-http")
                     # uvicorn.run(app, host="localhost", port=3000, log_level="debug")
                 except Exception as e:
