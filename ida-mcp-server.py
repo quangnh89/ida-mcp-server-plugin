@@ -157,7 +157,8 @@ def get_bytes(ea: int, size: int) -> List[int]:
         size: Number of bytes to read
     """
     try:
-        return [ida_bytes.get_byte(ea + i) for i in range(size)]
+        data = [ida_bytes.get_byte(ea + i) for i in range(size)]
+        return {"data": "application/octet-stream;base64," + data.encode("base64").replace("\n", "")}
     except Exception as e:
         print(f"Error in get_bytes: {str(e)}")
         return {"error": str(e)}
@@ -189,7 +190,7 @@ def get_decompiled_func(ea: int) -> Dict[str, Any]:
 
         decompiler = ida_hexrays.decompile(func.start_ea)
         if not decompiler:
-            return {"error": "Failed to decompile function at address 0x{ea:08X}"}
+            return {"error": f"Failed to decompile function at address 0x{ea:08X}"}
 
         return {"code": str(decompiler)}
     except Exception as e:
@@ -329,11 +330,11 @@ def get_exports() -> List[Tuple[int, int, int, str]]:
 
 @mcp.tool()
 @execute_on_main_thread
-def get_entry_point() -> List[int]:
+def get_entry_points() -> Dict[str, Any]:
     """
     Get a list of entry point of the binary.
     Returns:
-        A list of entry point addresses.
+        A list of entry point addresses or an error message.
     """
     try:
         import ida_entry
@@ -342,90 +343,156 @@ def get_entry_point() -> List[int]:
         for i in range(qty):
             ord_i = ida_entry.get_entry_ordinal(i)
             entry_list.append(ida_entry.get_entry(ord_i))
-        return entry_list
+        return {"entry_points": entry_list}
     except (ImportError, AttributeError):
         try:
             # Alternative method: idc.get_inf_attr to get
             import idc
-            return [idc.get_inf_attr(idc.INF_START_EA)]
+            return {"entry_points": [idc.get_inf_attr(idc.INF_START_EA)]}
         except (ImportError, AttributeError):
             # Last alternative method: use cvar.inf
-            return [idaapi.cvar.inf.start_ea]
-    except Exception:
-        return []
+            return {"entry_points": [idaapi.cvar.inf.start_ea]}
+    except Exception as e:
+        return {"error": f"Failed to retrieve entry points: {str(e)}"}
 
 
 @mcp.tool()
 @execute_on_main_thread
-def make_function(ea1: int, ea2: int = ida_idaapi.BADADDR) -> str:
-    """Make a function at specified address."""
+def make_function(ea1: int, ea2: int = ida_idaapi.BADADDR) -> Dict[str, Any]:
+    """
+    Make a function at specified address.
+    Args:
+        ea1: Effective address to create function
+        ea2: Optional effective address to specify the end of the function
+    Returns:
+        A dictionary indicating success or failure with a message.
+    """
     if ida_funcs.add_func(ea1, ea2):
-        return "Function created successfully at address 0x{ea1:08X}"
-    return "Failed to create function at address 0x{ea1:08X}"
+        return {"success": f"Function created successfully at address 0x{ea1:08X}"}
+    return {"error": f"Failed to create function at address 0x{ea1:08X}"}
 
 
 @mcp.tool()
 @execute_on_main_thread
-def undefine_function(ea: int) -> str:
-    """Undefine a function at specified address."""
+def undefine_function(ea: int) -> Dict[str, Any]:
+    """
+    Undefine a function at specified address.
+    Args:
+        ea: Effective address of the function to undefine
+    Returns:
+        A dictionary indicating success or failure with a message.
+    """
     if ida_funcs.del_func(ea):
-        return "Function undefined successfully at address 0x{ea:08X}"
-    return "Failed to undefine function at address 0x{ea:08X}"
+        return {"success": f"Function undefined successfully at address 0x{ea:08X}"}
+    return {"error": f"Failed to undefine function at address 0x{ea:08X}"}
 
 
 @mcp.tool()
 @execute_on_main_thread
 def get_dword_at(ea: int) -> int:
-    """Get the dword at specified address."""
+    """
+    Get the dword at specified address.
+
+    Args:
+        ea: Effective address to read from
+    Returns:
+        The dword value at the specified address.
+    """
     return idc.get_dword(ea)
 
 
 @mcp.tool()
 @execute_on_main_thread
 def get_word_at(ea: int) -> int:
-    """Get the word at specified address."""
+    """
+    Get the word at specified address.
+
+    Args:
+        ea: Effective address to read from
+    Returns:
+        The word value at the specified address.
+    """
     return idc.get_word(ea)
 
 
 @mcp.tool()
 @execute_on_main_thread
 def get_byte_at(ea: int) -> int:
-    """Get the byte at specified address."""
+    """
+    Get the byte at specified address.
+
+    Args:
+        ea: Effective address to read from
+    Returns:
+        The byte value at the specified address.
+    """
     return idc.get_byte(ea)
 
 
 @mcp.tool()
 @execute_on_main_thread
 def get_qword_at(ea: int) -> int:
-    """Get the qword at specified address."""
+    """
+    Get the qword at specified address.
+
+    Args:
+        ea: Effective address to read from
+    Returns:
+        The qword value at the specified address.
+    """
     return idc.get_qword(ea)
 
 
 @mcp.tool()
 @execute_on_main_thread
 def get_float_at(ea: int) -> float:
-    """Get the float at specified address."""
+    """
+    Get the float at specified address.
+
+    Args:
+        ea: Effective address to read from
+    Returns:
+        The float value at the specified address.
+    """
     return idc.get_float(ea)
 
 
 @mcp.tool()
 @execute_on_main_thread
 def get_double_at(ea: int) -> float:
-    """Get the double at specified address."""
+    """
+    Get the double at specified address.
+    Args:
+        ea: Effective address to read from
+    Returns:
+        The double value at the specified address.
+    """
     return idc.get_double(ea)
 
 
 @mcp.tool()
 @execute_on_main_thread
 def get_string_at(ea: int) -> str:
-    """Get the string at specified address."""
+    """
+    Get the string at specified address.
+
+    Args:
+        ea: Effective address to read from
+    Returns:
+        The string value at the specified address.
+    """
     return idc.get_strlit_contents(ea)
 
 
 @mcp.tool()
 @execute_on_main_thread
 def get_strings() -> List[Dict[str, Any]]:
-    """Get all strings in the binary."""
+    """
+    Get all strings in the binary.
+
+    Returns:
+        A list of dictionaries containing the address and string value.
+    """
     strings = []
     for s in idautils.Strings():
         strings.append({"address": s.ea, "string": str(s)})
@@ -436,6 +503,7 @@ def get_strings() -> List[Dict[str, Any]]:
 def get_current_file_path() -> str:
     """
     Get the current path of the binary.
+
     Returns:
         The current file path of the binary.
     """
@@ -446,6 +514,7 @@ def get_current_file_path() -> str:
 def get_metadata() -> Dict[str, Any]:
     """
     Get metadata about the current binary.
+
     Returns:
         A dictionary containing metadata such as file path, architecture, bitness, and entry point.
     """
@@ -496,7 +565,7 @@ def get_metadata() -> Dict[str, Any]:
 
 @mcp.tool()
 @execute_on_main_thread
-def rename_local_variable(func_ea: int, old_name: str, new_name: str) -> str:
+def rename_local_variable(func_ea: int, old_name: str, new_name: str) -> Dict[str, str]:
     """
     Rename a local variable in a function.
 
@@ -511,18 +580,18 @@ def rename_local_variable(func_ea: int, old_name: str, new_name: str) -> str:
     try:
         func = idaapi.get_func(func_ea)
         if not func:
-            return f"No function found at address 0x{func_ea:08X}"
+            return {"error": f"No function found at address 0x{func_ea:08X}"}
         if not ida_hexrays.rename_lvar(func.start_ea, old_name, new_name):
-            return f"Failed to rename local variable '{old_name}' in function at address 0x{func_ea:08X}"
+            return {"error": f"Failed to rename local variable '{old_name}' in function at address 0x{func_ea:08X}"}
         refresh_decompiler_ctext(func.start_ea)
-        return f"Local variable '{old_name}' renamed to '{new_name}'"
+        return {"success": f"Local variable '{old_name}' renamed to '{new_name}'"}
     except Exception as e:
-        return f"Error renaming local variable: {str(e)}"
+        return {"error": f"Error renaming local variable: {str(e)}"}
 
 
 @mcp.tool()
 @execute_on_main_thread
-def rename_global_variable(old_name: str, new_name: str) -> str:
+def rename_global_variable(old_name: str, new_name: str) -> Dict[str, str]:
     """
     Rename a global variable.
 
@@ -536,18 +605,18 @@ def rename_global_variable(old_name: str, new_name: str) -> str:
     try:
         ea = idaapi.get_name_ea(idaapi.BADADDR, old_name)
         if ea == idaapi.BADADDR:
-            return f"No global variable found with name '{old_name}'"
+            return {"error": f"No global variable found with name '{old_name}'"}
         if not ida_name.set_name(ea, new_name, ida_name.SN_CHECK):
-            return f"Failed to rename global variable '{old_name}'"
+            return {"error": f"Failed to rename global variable '{old_name}'"}
         refresh_decompiler_ctext(ea)
-        return f"Global variable '{old_name}' renamed to '{new_name}'"
+        return {"success": f"Global variable '{old_name}' renamed to '{new_name}'"}
     except Exception as e:
-        return f"Error renaming global variable: {str(e)}"
+        return {"error": f"Error renaming global variable: {str(e)}"}
 
 
 @mcp.tool()
 @execute_on_main_thread
-def set_global_variable_name(ea: int, new_name: str) -> str:
+def set_global_variable_name(ea: int, new_name: str) -> Dict[str, str]:
     """
     Set the name of a global variable at a specific address.
 
@@ -560,33 +629,37 @@ def set_global_variable_name(ea: int, new_name: str) -> str:
     """
     try:
         if not ida_name.set_name(ea, new_name, ida_name.SN_CHECK):
-            return f"Failed to set name for global variable at address 0x{ea:08X}"
+            return {"error": f"Failed to set name for global variable at address 0x{ea:08X}"}
         refresh_decompiler_ctext(ea)
-        return f"Global variable at address 0x{ea:08X} renamed to '{new_name}'"
+        return {"success": f"Global variable at address 0x{ea:08X} renamed to '{new_name}'"}
     except Exception as e:
-        return f"Error setting global variable name: {str(e)}"
+        return {"error": f"Error setting global variable name: {str(e)}"}
 
 
 @mcp.tool()
 @execute_on_main_thread
-def set_global_variable_type(variable_name: str, new_type: str) -> str:
+def set_global_variable_type(variable_name: str, new_type: str) -> Dict[str, str]:
     """
     Set the type of a global variable at a specific address.
 
     Args:
         variable_name: Name of the global variable.
-        new_name: New type for the variable.
+        new_type: New type for the variable.
 
     Returns:
         A message indicating success or failure.
     """
 
     ea = idaapi.get_name_ea(idaapi.BADADDR, variable_name)
+    if ea == idaapi.BADADDR:
+        return {"error": f"No global variable found with name '{variable_name}'"}
     tif = get_type_by_name(new_type)
     if not tif:
-        return "Parsed declaration is not a variable type"
+        return {"error": "Parsed declaration is not a variable type"}
     if not ida_typeinf.apply_tinfo(ea, tif, ida_typeinf.PT_SIL):
-        return "Failed to apply type"
+        return {"error": "Failed to apply type"}
+    refresh_decompiler_ctext(ea)
+    return {"success": f"Global variable '{variable_name}' type set to '{new_type}'"}
 
 
 @mcp.tool()
@@ -604,16 +677,16 @@ def set_function_name(ea: int, new_name: str) -> str:
     """
     try:
         if not ida_name.set_name(ea, new_name, ida_name.SN_CHECK):
-            return f"Failed to set name for function at address 0x{ea:08X}"
+            return {"error": f"Failed to set name for function at address 0x{ea:08X}"}
         refresh_decompiler_ctext(ea)
-        return f"Function at address 0x{ea:08X} renamed to '{new_name}'"
+        return {"success": f"Function at address 0x{ea:08X} renamed to '{new_name}'"}
     except Exception as e:
-        return f"Error setting function name at address 0x{ea:08X}: {str(e)}"
+        return {"error": f"Error setting function name at address 0x{ea:08X}: {str(e)}"}
 
 
 @mcp.tool()
 @execute_on_main_thread
-def set_function_prototype(ea: int, prototype: str) -> str:
+def set_function_prototype(ea: int, prototype: str) -> Dict[str, str]:
     """
     Set the prototype of a function at a specific address.
 
@@ -627,17 +700,17 @@ def set_function_prototype(ea: int, prototype: str) -> str:
     try:
         func = idaapi.get_func(ea)
         if not func:
-            return f"No function found at address 0x{ea:08X}"
+            return {"error": f"No function found at address 0x{ea:08X}"}
 
         tif = ida_typeinf.tinfo_t(prototype, None, ida_typeinf.PT_SIL)
         if not tif or not tif.is_func():
-            return "Parsed declaration is not a function type"
+            return {"error": "Parsed declaration is not a function type"}
         if not ida_typeinf.apply_tinfo(func.start_ea, tif, ida_typeinf.PT_SIL):
-            return "Failed to apply type"
+            return {"error": "Failed to apply type"}
         refresh_decompiler_ctext(ea)
-        return f"Function type at address 0x{ea:08X} set to '{prototype}'"
+        return {"success": f"Function type at address 0x{ea:08X} set to '{prototype}'"}
     except Exception as e:
-        return f"Error setting function type at address 0x{ea:08X}: {str(e)}"
+        return {"error": f"Error setting function type at address 0x{ea:08X}: {str(e)}"}
 
 
 @mcp.tool()
@@ -676,7 +749,7 @@ def read_file(relative_path: str, encoding: str = None) -> Any:
     base_dir = os.path.dirname(idc.get_input_file_path())
     if  ':' in relative_path or '..' in relative_path or '//' in relative_path:
         return json.dumps({"error": "Invalid relative path"})
-    if relative_path is "":
+    if relative_path == "":
         return json.dumps({"error": "Relative path is required"})
     target_path = os.path.join(base_dir, relative_path)
     target_path = sanitize_filepath(target_path)
@@ -698,7 +771,7 @@ def write_file(relative_path: str, content: str, encoding: str = None) -> None:
     base_dir = os.path.dirname(idc.get_input_file_path())
     if  ':' in relative_path or '..' in relative_path or '//' in relative_path:
         return json.dumps({"error": "Invalid relative path"})
-    if relative_path is "":
+    if relative_path == "":
         return json.dumps({"error": "Relative path is required"})
     target_path = os.path.join(base_dir, relative_path)
     target_path = sanitize_filepath(target_path)
@@ -707,7 +780,7 @@ def write_file(relative_path: str, content: str, encoding: str = None) -> None:
 
 @mcp.tool()
 @execute_on_main_thread
-def read_binary(relative_path: str) -> bytes:
+def read_binary(relative_path: str) -> Dict[str, str]:
     """
     Read the content of a binary file.
     Args:
@@ -717,17 +790,22 @@ def read_binary(relative_path: str) -> bytes:
     """
     base_dir = os.path.dirname(idc.get_input_file_path())
     if  ':' in relative_path or '..' in relative_path or '//' in relative_path:
-        return json.dumps({"error": "Invalid relative path"})
-    if relative_path is "":
-        return json.dumps({"error": "Relative path is required"})
+        return {"error": "Invalid relative path"}
+    if relative_path == "":
+        return {"error": "Relative path is required"}
     target_path = os.path.join(base_dir, relative_path)
     target_path = sanitize_filepath(target_path)
-    with open(target_path, "rb") as f:
-        return f.read()
+    try:
+        with open(target_path, "rb") as f:
+            data = f.read()
+            return {"data": "application/octet-stream;base64," + data.encode("base64").replace("\n", "")}
+    except Exception as e:
+        return {"error": str(e)}
+
 
 @mcp.tool()
 @execute_on_main_thread
-def write_binary(relative_path: str , content: bytes) -> None:
+def write_binary(relative_path: str , content: str) -> Dict[str, str]:
     """
     Write content to a binary file.
     Args:
@@ -738,14 +816,18 @@ def write_binary(relative_path: str , content: bytes) -> None:
     """
     base_dir = os.path.dirname(idc.get_input_file_path())
     if  ':' in relative_path or '..' in relative_path or '//' in relative_path:
-        return json.dumps({"error": "Invalid relative path"})
-    if relative_path is "":
-        return json.dumps({"error": "Relative path is required"})
+        return {"error": "Invalid relative path"}
+    if relative_path == "":
+        return {"error": "Relative path is required"}
     target_path = os.path.join(base_dir, relative_path)
     target_path = sanitize_filepath(target_path)
-    with open(target_path, "wb") as f:
-        f.write(content)
-
+    try:
+        with open(target_path, "wb") as f:
+            content = content.replace("application/octet-stream;base64,", "")
+            content = content.decode("base64")
+            f.write(content)
+    except Exception as e:
+        return {"error": str(e)}
 
 @mcp.tool()
 @execute_on_main_thread
@@ -787,7 +869,7 @@ def binary_analysis_strategy() -> str:
         with open(guideline_path, "r", encoding="utf-8") as f:
             return f.read()
     else:
-        return "Binary analysis strategy guideline file not found."
+        return "Binary analysis strategy guideline not found."
 
 
 def create_starlette_app(mcp_server: Server, *, debug: bool = False) -> Starlette:
