@@ -5,11 +5,12 @@ interacting with IDA Pro via streamable-http.
 """
 
 # pylint: disable=broad-exception-caught
+# pylint: disable=line-too-long
 
 import glob
-import json
 import os
 import threading
+import base64
 
 try:
     import ida_bytes
@@ -30,11 +31,6 @@ except ImportError:
 
 from typing import Dict, List, Any, Tuple
 from functools import wraps
-from starlette.middleware import Middleware
-from starlette.middleware.cors import CORSMiddleware
-from starlette.applications import Starlette
-from starlette.routing import Mount
-from mcp.server import Server
 from fastmcp import FastMCP
 from pathvalidate import sanitize_filepath
 
@@ -138,9 +134,14 @@ def get_type_by_name(type_name: str) -> ida_typeinf.tinfo_t:
 
 def refresh_decompiler_ctext(function_address: int):
     """Refresh the decompiler view for a function at the specified address.
+
     Args:
         function_address: Effective address of the function to refresh
+    Returns:
+        None
     """
+    if not ida_hexrays.init_hexrays_plugin():
+        return
     error = ida_hexrays.hexrays_failure_t()
     cfunc: ida_hexrays.cfunc_t = ida_hexrays.decompile_func(function_address, error, ida_hexrays.DECOMP_WARNINGS)
     if cfunc:
@@ -149,16 +150,22 @@ def refresh_decompiler_ctext(function_address: int):
 
 @mcp.tool()
 @execute_on_main_thread
-def get_bytes(ea: int, size: int) -> List[int]:
+def get_bytes(ea: int, size: int) -> Dict[str, Any]:
     """Get bytes at specified address.
 
     Args:
         ea: Effective address to read from
         size: Number of bytes to read
+
+    Returns:
+        A dictionary with either the byte data or an error message.
     """
     try:
-        data = [ida_bytes.get_byte(ea + i) for i in range(size)]
-        return {"data": "application/octet-stream;base64," + data.encode("base64").replace("\n", "")}
+        data = ida_bytes.get_bytes(ea, size)
+        if data is None:
+            return {"error": f"Failed to read {size} bytes at address 0x{ea:08X}"}
+        b64_data = base64.b64encode(bytes(data)).replace(b"\n", b"").decode('ascii')
+        return {"success": "application/octet-stream;base64," + b64_data}
     except Exception as e:
         print(f"Error in get_bytes: {str(e)}")
         return {"error": str(e)}
@@ -171,6 +178,8 @@ def get_disasm(ea: int) -> str:
 
     Args:
         ea: Effective address to disassemble
+    Returns:
+        Disassembly line as a string
     """
     return idc.generate_disasm_line(ea, 0)
 
@@ -182,8 +191,12 @@ def get_decompiled_func(ea: int) -> Dict[str, Any]:
 
     Args:
         ea: Effective address within the function
+    Returns:
+        A dictionary with either the decompiled code or an error message.
     """
     try:
+        if not ida_hexrays.init_hexrays_plugin():
+            return {"error": "Hex-Rays decompiler is not available."}
         func = ida_funcs.get_func(ea)
         if not func:
             return {"error": f"No function found at address 0x{ea:08X}"}
@@ -258,7 +271,13 @@ def get_segments() -> List[Dict[str, Any]]:
 @mcp.tool()
 @execute_on_main_thread
 def get_functions() -> List[Dict[str, Any]]:
-    """Get all functions in the binary."""
+    """
+    Get all functions in the binary.
+
+    Returns:
+        A list of dictionaries containing the address and name of each function.
+
+    """
     functions = []
     for func_ea in idautils.Functions():
         func_name = ida_name.get_name(func_ea)
@@ -273,6 +292,8 @@ def get_xrefs_to(ea: int) -> List[Dict[str, Any]]:
 
     Args:
         ea: Effective address to find references to
+    Returns:
+        A list of dictionaries containing the address and type of each cross reference.
     """
     xrefs = []
     for xref in idautils.XrefsTo(ea, 0):
@@ -282,7 +303,7 @@ def get_xrefs_to(ea: int) -> List[Dict[str, Any]]:
 
 @mcp.tool()
 @execute_on_main_thread
-def get_imports() -> dict[str, list[tuple[int, str, int]]]:
+def get_imports() -> Dict[str, List[Tuple[int, str, int]]]:
     """Get all imports in the binary.
 
     Args:
@@ -333,6 +354,7 @@ def get_exports() -> List[Tuple[int, int, int, str]]:
 def get_entry_points() -> Dict[str, Any]:
     """
     Get a list of entry point of the binary.
+
     Returns:
         A list of entry point addresses or an error message.
     """
@@ -481,7 +503,12 @@ def get_string_at(ea: int) -> str:
     Returns:
         The string value at the specified address.
     """
-    return idc.get_strlit_contents(ea)
+    s = idc.get_strlit_contents(ea)
+    if isinstance(s, bytes):
+        return s.decode('utf-8', errors='ignore')
+    elif isinstance(s, str):
+        return s
+    return ""
 
 
 @mcp.tool()
@@ -547,12 +574,11 @@ def get_metadata() -> Dict[str, Any]:
             "file_path": idc.get_input_file_path(),
             "module_name": idaapi.get_root_filename(),
             "file_size": ida_nalt.retrieve_input_file_size(),
-            "md5": ida_nalt.retrieve_input_file_md5(),
-            "sha256": ida_nalt.retrieve_input_file_sha256(),
+            "md5": ida_nalt.retrieve_input_file_md5().hex(),
+            "sha256": ida_nalt.retrieve_input_file_sha256().hex(),
             "crc32": ida_nalt.retrieve_input_file_crc32(),
             "image_size": image_size,
             "image_base": idaapi.get_imagebase(),
-            "compiler": ida_nalt.get_compiler_name(),
             "architecture": info.procname,
             "bits": bits,
             "endian": endian,
@@ -578,6 +604,8 @@ def rename_local_variable(func_ea: int, old_name: str, new_name: str) -> Dict[st
         A message indicating success or failure.
     """
     try:
+        if not ida_hexrays.init_hexrays_plugin():
+            return {"error": "Hex-Rays decompiler is not available."}
         func = idaapi.get_func(func_ea)
         if not func:
             return {"error": f"No function found at address 0x{func_ea:08X}"}
@@ -715,7 +743,7 @@ def set_function_prototype(ea: int, prototype: str) -> Dict[str, str]:
 
 @mcp.tool()
 @execute_on_main_thread
-def list_files_with_relative_path(relative_path: str = ""):
+def list_files_with_relative_path(relative_path: str = "") -> Dict[str, Any]:
     """
     List all files in the specified relative path in the current directory.
     Args:
@@ -726,39 +754,46 @@ def list_files_with_relative_path(relative_path: str = ""):
     """
     base_dir = os.path.dirname(idc.get_input_file_path())
     if  ':' in relative_path or '..' in relative_path or '//' in relative_path:
-        return json.dumps({"error": "Invalid relative path"})
+        return {"error": "Invalid relative path"}
 
     if relative_path is None or relative_path == "":
-        return glob.glob(os.path.join(base_dir, "*"))
+        return {"success": glob.glob(os.path.join(base_dir, "*"))}
     else:
         target_path = os.path.join(base_dir, relative_path)
         target_path = sanitize_filepath(target_path)
-        return glob.glob(os.path.join(target_path, "*"))
+        return {"success": glob.glob(os.path.join(target_path, "*"))}
 
 @mcp.tool()
 @execute_on_main_thread
-def read_file(relative_path: str, encoding: str = None) -> Any:
+def read_file(relative_path: str, encoding: str = None) -> Dict[str, str]:
     """
     Read the content of a file.
     Args:
         relative_path: Relative path to the file from the current binary's directory.
-        encoding: Encoding to use when reading the file. If None, the default system encoding is used.
+        encoding: Encoding to use when reading the file.
+        If None, the default system encoding is used.
     Returns:
         The content of the file.
     """
     base_dir = os.path.dirname(idc.get_input_file_path())
     if  ':' in relative_path or '..' in relative_path or '//' in relative_path:
-        return json.dumps({"error": "Invalid relative path"})
+        return {"error": "Invalid relative path"}
     if relative_path == "":
-        return json.dumps({"error": "Relative path is required"})
+        return {"error": "Relative path is required"}
     target_path = os.path.join(base_dir, relative_path)
     target_path = sanitize_filepath(target_path)
-    with open(target_path, "r", encoding=encoding) as f:
-        return f.read()
+    try:
+        with open(target_path, "r", encoding=encoding) as f:
+            data = f.read()
+            if encoding:
+                return {"success": f'text/plain; charset="{encoding}",{data}'}
+            return {"success": f"text/plain; charset=\"utf-8\",{data}"}
+    except Exception as e:
+        return {"error": str(e)}
 
 @mcp.tool()
 @execute_on_main_thread
-def write_file(relative_path: str, content: str, encoding: str = None) -> None:
+def write_file(relative_path: str, content: str, encoding: str = None) -> Dict[str, str]:
     """
     Write content to a file.
     Args:
@@ -770,13 +805,17 @@ def write_file(relative_path: str, content: str, encoding: str = None) -> None:
     """
     base_dir = os.path.dirname(idc.get_input_file_path())
     if  ':' in relative_path or '..' in relative_path or '//' in relative_path:
-        return json.dumps({"error": "Invalid relative path"})
+        return {"error": "Invalid relative path"}
     if relative_path == "":
-        return json.dumps({"error": "Relative path is required"})
-    target_path = os.path.join(base_dir, relative_path)
-    target_path = sanitize_filepath(target_path)
-    with open(target_path, "w", encoding=encoding) as f:
-        f.write(content)
+        return {"error": "Relative path is required"}
+    try:
+        target_path = os.path.join(base_dir, relative_path)
+        target_path = sanitize_filepath(target_path)
+        with open(target_path, "w", encoding=encoding) as f:
+            f.write(content)
+            return {"success": f"File written successfully to '{relative_path}'"}
+    except Exception as e:
+        return {"error": str(e)}
 
 @mcp.tool()
 @execute_on_main_thread
@@ -798,7 +837,8 @@ def read_binary(relative_path: str) -> Dict[str, str]:
     try:
         with open(target_path, "rb") as f:
             data = f.read()
-            return {"data": "application/octet-stream;base64," + data.encode("base64").replace("\n", "")}
+            b64_data = base64.b64encode(bytes(data)).replace(b"\n", b"").encode('ascii')
+            return {"success": "application/octet-stream;base64," + b64_data}
     except Exception as e:
         return {"error": str(e)}
 
@@ -823,9 +863,10 @@ def write_binary(relative_path: str , content: str) -> Dict[str, str]:
     target_path = sanitize_filepath(target_path)
     try:
         with open(target_path, "wb") as f:
-            content = content.replace("application/octet-stream;base64,", "")
-            content = content.decode("base64")
+            content = content.replace("application/octet-stream;base64,", "").decode('ascii')
+            content = base64.b64decode(content)
             f.write(content)
+            return {"success": f"Binary file written successfully to '{relative_path}'"}
     except Exception as e:
         return {"error": str(e)}
 
@@ -858,38 +899,21 @@ def get_instruction_length(address: int) -> int:
 
 
 @mcp.prompt()
-def binary_analysis_strategy() -> str:
+def binary_analysis_strategy() -> Dict[str, str]:
     """
     Guild for analyzing the binary
     """
-    script_path = os.path.realpath(os.path.abspath(__file__))
-    script_dir = os.path.dirname(script_path)
-    guideline_path = os.path.join(script_dir, "binary_analysis_strategy.txt")
-    if os.path.exists(guideline_path):
-        with open(guideline_path, "r", encoding="utf-8") as f:
-            return f.read()
-    else:
-        return "Binary analysis strategy guideline not found."
-
-
-def create_starlette_app(mcp_server: Server, *, debug: bool = False) -> Starlette:
-    """Create a Starlette application that can serve the provided mcp server."""
-
-    middleware = [
-        Middleware(
-            CORSMiddleware,
-            allow_origins=["*"],
-            allow_methods=["*"],
-            allow_headers=["*"],
-        )
-    ]
-    return Starlette(
-        debug=debug,
-        middleware=middleware,
-        routes=[
-            Mount("/", app=mcp_server.http_app()),
-        ],
-    )
+    try:
+        script_path = os.path.realpath(os.path.abspath(__file__))
+        script_dir = os.path.dirname(script_path)
+        guideline_path = os.path.join(script_dir, "binary_analysis_strategy.txt")
+        if os.path.exists(guideline_path):
+            with open(guideline_path, "r", encoding="utf-8") as f:
+                return {"success": f.read()}
+        else:
+            return {"error": "Binary analysis strategy guideline not found."}
+    except Exception as e:
+        return {"error": str(e)}
 
 
 class ModelContextProtocolPlugin(ida_idaapi.plugin_t):
@@ -906,12 +930,10 @@ class ModelContextProtocolPlugin(ida_idaapi.plugin_t):
         """Initialize the plugin and start the MCP server."""
         try:
             print("Initializing IDA Model Context Protocol Server...")
-            # app = create_starlette_app(mcp, debug=True)
 
             def run_server():
                 try:
                     mcp.run(transport="streamable-http")
-                    # uvicorn.run(app, host="localhost", port=3000, log_level="debug")
                 except Exception as e:
                     print(f"Server error: {str(e)}")
 

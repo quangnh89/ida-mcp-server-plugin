@@ -1,7 +1,4 @@
 ﻿fastmcp==2.11.3
-# mcp==1.13.1
-starlette==0.47.3
-uvicorn==0.35.0
 pydantic==2.11.7
 pydantic_core==2.33.2
 anyio==4.10.0
