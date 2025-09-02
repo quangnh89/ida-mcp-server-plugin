@@ -25,6 +25,7 @@ try:
     import ida_kernwin
     import idaapi
     import ida_typeinf
+
 except ImportError:
     print("This script must be run within IDA Pro with Python support.")
     raise
@@ -32,13 +33,12 @@ except ImportError:
 from typing import Dict, List, Any, Tuple
 from functools import wraps
 from fastmcp import FastMCP
-from pathvalidate import sanitize_filepath
 
 
 # Initialize FastMCP server for IDA tools
 mcp = FastMCP("IDA MCP Server", port=3000)
 
-def execute_on_main_thread(f):
+def idaread(f):
     """Decorator to ensure the function runs on IDA's main thread."""
     @wraps(f)
     def wrapper(*args, **kwargs):
@@ -52,7 +52,28 @@ def execute_on_main_thread(f):
                 exception.append(e)
             return 0
 
-        ida_kernwin.execute_sync(run_function, ida_kernwin.MFF_FAST)
+        ida_kernwin.execute_sync(run_function, ida_kernwin.MFF_READ)
+
+        if exception:
+            raise exception[0]
+        return result[0]
+    return wrapper
+
+def idawrite(f):
+    """Decorator to ensure the function runs on IDA's main thread."""
+    @wraps(f)
+    def wrapper(*args, **kwargs):
+        result = []
+        exception = []
+
+        def run_function():
+            try:
+                result.append(f(*args, **kwargs))
+            except Exception as e:
+                exception.append(e)
+            return 0
+
+        ida_kernwin.execute_sync(run_function, ida_kernwin.MFF_WRITE)
 
         if exception:
             raise exception[0]
@@ -149,7 +170,7 @@ def refresh_decompiler_ctext(function_address: int):
 
 
 @mcp.tool()
-@execute_on_main_thread
+@idaread
 def get_bytes(ea: int, size: int) -> Dict[str, Any]:
     """Get bytes at specified address.
 
@@ -172,7 +193,7 @@ def get_bytes(ea: int, size: int) -> Dict[str, Any]:
 
 
 @mcp.tool()
-@execute_on_main_thread
+@idaread
 def get_disasm(ea: int) -> str:
     """Get disassembly at specified address.
 
@@ -185,7 +206,7 @@ def get_disasm(ea: int) -> str:
 
 
 @mcp.tool()
-@execute_on_main_thread
+@idaread
 def get_decompiled_func(ea: int) -> Dict[str, Any]:
     """Get decompiled pseudocode of function containing address.
 
@@ -211,7 +232,7 @@ def get_decompiled_func(ea: int) -> Dict[str, Any]:
 
 
 @mcp.tool()
-@execute_on_main_thread
+@idaread
 def get_function_name(ea: int) -> str:
     """Get function name at specified address.
 
@@ -224,8 +245,8 @@ def get_function_name(ea: int) -> str:
 
 
 @mcp.tool()
-@execute_on_main_thread
-def get_function_by_name(name: str) -> int:
+@idaread
+def get_function_by_name(name: str) -> Dict[str, Any]:
     """Get function address by name.
 
     Args:
@@ -234,11 +255,13 @@ def get_function_by_name(name: str) -> int:
         Address of the function or idaapi.BADADDR if not found
     """
     function_address = idaapi.get_name_ea(idaapi.BADADDR, name)
-    return function_address
+    if function_address == idaapi.BADADDR:
+        return {"error": f"Function '{name}' not found."}
+    return {"success": function_address}
 
 
 @mcp.tool()
-@execute_on_main_thread
+@idaread
 def get_segments() -> List[Dict[str, Any]]:
     """Get all segments information.
 
@@ -269,7 +292,7 @@ def get_segments() -> List[Dict[str, Any]]:
 
 
 @mcp.tool()
-@execute_on_main_thread
+@idaread
 def get_functions() -> List[Dict[str, Any]]:
     """
     Get all functions in the binary.
@@ -286,7 +309,7 @@ def get_functions() -> List[Dict[str, Any]]:
 
 
 @mcp.tool()
-@execute_on_main_thread
+@idaread
 def get_xrefs_to(ea: int) -> List[Dict[str, Any]]:
     """Get all cross references to specified address.
 
@@ -302,7 +325,7 @@ def get_xrefs_to(ea: int) -> List[Dict[str, Any]]:
 
 
 @mcp.tool()
-@execute_on_main_thread
+@idaread
 def get_imports() -> Dict[str, List[Tuple[int, str, int]]]:
     """Get all imports in the binary.
 
@@ -340,7 +363,7 @@ def get_imports() -> Dict[str, List[Tuple[int, str, int]]]:
 
 
 @mcp.tool()
-@execute_on_main_thread
+@idaread
 def get_exports() -> List[Tuple[int, int, int, str]]:
     """Get all exports in the binary.
 
@@ -350,7 +373,7 @@ def get_exports() -> List[Tuple[int, int, int, str]]:
 
 
 @mcp.tool()
-@execute_on_main_thread
+@idaread
 def get_entry_points() -> Dict[str, Any]:
     """
     Get a list of entry point of the binary.
@@ -365,21 +388,21 @@ def get_entry_points() -> Dict[str, Any]:
         for i in range(qty):
             ord_i = ida_entry.get_entry_ordinal(i)
             entry_list.append(ida_entry.get_entry(ord_i))
-        return {"entry_points": entry_list}
+        return {"success": entry_list}
     except (ImportError, AttributeError):
         try:
             # Alternative method: idc.get_inf_attr to get
             import idc
-            return {"entry_points": [idc.get_inf_attr(idc.INF_START_EA)]}
+            return {"success": [idc.get_inf_attr(idc.INF_START_EA)]}
         except (ImportError, AttributeError):
             # Last alternative method: use cvar.inf
-            return {"entry_points": [idaapi.cvar.inf.start_ea]}
+            return {"success": [idaapi.cvar.inf.start_ea]}
     except Exception as e:
         return {"error": f"Failed to retrieve entry points: {str(e)}"}
 
 
 @mcp.tool()
-@execute_on_main_thread
+@idaread
 def make_function(ea1: int, ea2: int = ida_idaapi.BADADDR) -> Dict[str, Any]:
     """
     Make a function at specified address.
@@ -395,7 +418,7 @@ def make_function(ea1: int, ea2: int = ida_idaapi.BADADDR) -> Dict[str, Any]:
 
 
 @mcp.tool()
-@execute_on_main_thread
+@idaread
 def undefine_function(ea: int) -> Dict[str, Any]:
     """
     Undefine a function at specified address.
@@ -410,7 +433,7 @@ def undefine_function(ea: int) -> Dict[str, Any]:
 
 
 @mcp.tool()
-@execute_on_main_thread
+@idaread
 def get_dword_at(ea: int) -> int:
     """
     Get the dword at specified address.
@@ -424,7 +447,7 @@ def get_dword_at(ea: int) -> int:
 
 
 @mcp.tool()
-@execute_on_main_thread
+@idaread
 def get_word_at(ea: int) -> int:
     """
     Get the word at specified address.
@@ -438,7 +461,7 @@ def get_word_at(ea: int) -> int:
 
 
 @mcp.tool()
-@execute_on_main_thread
+@idaread
 def get_byte_at(ea: int) -> int:
     """
     Get the byte at specified address.
@@ -452,7 +475,7 @@ def get_byte_at(ea: int) -> int:
 
 
 @mcp.tool()
-@execute_on_main_thread
+@idaread
 def get_qword_at(ea: int) -> int:
     """
     Get the qword at specified address.
@@ -466,7 +489,7 @@ def get_qword_at(ea: int) -> int:
 
 
 @mcp.tool()
-@execute_on_main_thread
+@idaread
 def get_float_at(ea: int) -> float:
     """
     Get the float at specified address.
@@ -480,7 +503,7 @@ def get_float_at(ea: int) -> float:
 
 
 @mcp.tool()
-@execute_on_main_thread
+@idaread
 def get_double_at(ea: int) -> float:
     """
     Get the double at specified address.
@@ -493,7 +516,7 @@ def get_double_at(ea: int) -> float:
 
 
 @mcp.tool()
-@execute_on_main_thread
+@idaread
 def get_string_at(ea: int) -> str:
     """
     Get the string at specified address.
@@ -512,7 +535,7 @@ def get_string_at(ea: int) -> str:
 
 
 @mcp.tool()
-@execute_on_main_thread
+@idaread
 def get_strings() -> List[Dict[str, Any]]:
     """
     Get all strings in the binary.
@@ -526,7 +549,7 @@ def get_strings() -> List[Dict[str, Any]]:
     return strings
 
 @mcp.tool()
-@execute_on_main_thread
+@idaread
 def get_current_file_path() -> str:
     """
     Get the current path of the binary.
@@ -537,7 +560,7 @@ def get_current_file_path() -> str:
     return idc.get_input_file_path()
 
 @mcp.tool()
-@execute_on_main_thread
+@idaread
 def get_metadata() -> Dict[str, Any]:
     """
     Get metadata about the current binary.
@@ -584,13 +607,13 @@ def get_metadata() -> Dict[str, Any]:
             "endian": endian,
         }
 
-        return metadata
+        return {"success": metadata}
     except Exception as e:
         return {"error": str(e)}
 
 
 @mcp.tool()
-@execute_on_main_thread
+@idaread
 def rename_local_variable(func_ea: int, old_name: str, new_name: str) -> Dict[str, str]:
     """
     Rename a local variable in a function.
@@ -618,7 +641,7 @@ def rename_local_variable(func_ea: int, old_name: str, new_name: str) -> Dict[st
 
 
 @mcp.tool()
-@execute_on_main_thread
+@idaread
 def rename_global_variable(old_name: str, new_name: str) -> Dict[str, str]:
     """
     Rename a global variable.
@@ -643,7 +666,7 @@ def rename_global_variable(old_name: str, new_name: str) -> Dict[str, str]:
 
 
 @mcp.tool()
-@execute_on_main_thread
+@idaread
 def set_global_variable_name(ea: int, new_name: str) -> Dict[str, str]:
     """
     Set the name of a global variable at a specific address.
@@ -665,7 +688,7 @@ def set_global_variable_name(ea: int, new_name: str) -> Dict[str, str]:
 
 
 @mcp.tool()
-@execute_on_main_thread
+@idaread
 def set_global_variable_type(variable_name: str, new_type: str) -> Dict[str, str]:
     """
     Set the type of a global variable at a specific address.
@@ -691,7 +714,7 @@ def set_global_variable_type(variable_name: str, new_type: str) -> Dict[str, str
 
 
 @mcp.tool()
-@execute_on_main_thread
+@idaread
 def set_function_name(ea: int, new_name: str) -> str:
     """
     Set the name of a function at a specific address.
@@ -713,7 +736,7 @@ def set_function_name(ea: int, new_name: str) -> str:
 
 
 @mcp.tool()
-@execute_on_main_thread
+@idaread
 def set_function_prototype(ea: int, prototype: str) -> Dict[str, str]:
     """
     Set the prototype of a function at a specific address.
@@ -741,8 +764,40 @@ def set_function_prototype(ea: int, prototype: str) -> Dict[str, str]:
         return {"error": f"Error setting function type at address 0x{ea:08X}: {str(e)}"}
 
 
+def relative_path_to_absolute(relative_path: str, block_ads_on_windows: bool = True) -> str:
+    """
+    Convert a relative path to an absolute path based on the current binary's directory.
+    Args:
+        relative_path: Relative path to convert.
+    Returns:
+        The absolute path.
+    """
+    input_path = idc.get_input_file_path()
+    if not input_path:
+        raise ValueError("No input file path found")
+    base_dir = os.path.dirname(os.path.abspath(input_path))
+
+    # Validate relative_path
+    if not relative_path:
+        raise ValueError("Relative path is required")
+
+    # Reject absolute paths
+    if os.path.isabs(relative_path):
+        raise ValueError("Absolute paths are not allowed")
+
+    normalized_relative_path = os.path.normpath(relative_path)
+    if normalized_relative_path.startswith(".."):
+        raise ValueError("Invalid path traversal is not allowed")
+    if block_ads_on_windows and os.name == 'nt' and ':' in normalized_relative_path:
+        raise ValueError("Drive letters are not allowed in relative paths on Windows")
+
+    # build absolute path
+    target_path = os.path.join(base_dir, normalized_relative_path)
+    return target_path
+
+
 @mcp.tool()
-@execute_on_main_thread
+@idaread
 def list_files_with_relative_path(relative_path: str = "") -> Dict[str, Any]:
     """
     List all files in the specified relative path in the current directory.
@@ -750,39 +805,35 @@ def list_files_with_relative_path(relative_path: str = "") -> Dict[str, Any]:
         relative_path: Relative path to list files from the current binary's directory.
                        If empty, lists files in the current binary's directory.
     Returns:
-        A list of file paths.
+        A dictionary containing either the list of file paths or an error message.
     """
-    base_dir = os.path.dirname(idc.get_input_file_path())
-    if  ':' in relative_path or '..' in relative_path or '//' in relative_path:
-        return {"error": "Invalid relative path"}
+    try:
+        base_dir = os.path.dirname(idc.get_input_file_path())
+        if relative_path is None or relative_path == "":
+            return {"success": glob.glob(os.path.join(base_dir, "*"))}
 
-    if relative_path is None or relative_path == "":
-        return {"success": glob.glob(os.path.join(base_dir, "*"))}
-    else:
-        target_path = os.path.join(base_dir, relative_path)
-        target_path = sanitize_filepath(target_path)
+        target_path = relative_path_to_absolute(relative_path)
         return {"success": glob.glob(os.path.join(target_path, "*"))}
+    except Exception as e:
+        return {"error": str(e)}
+
 
 @mcp.tool()
-@execute_on_main_thread
+@idaread
 def read_file(relative_path: str, encoding: str = None) -> Dict[str, str]:
     """
     Read the content of a file.
+
     Args:
         relative_path: Relative path to the file from the current binary's directory.
         encoding: Encoding to use when reading the file.
         If None, the default system encoding is used.
+
     Returns:
-        The content of the file.
+        A dictionary containing either the content of the file or an error message.
     """
-    base_dir = os.path.dirname(idc.get_input_file_path())
-    if  ':' in relative_path or '..' in relative_path or '//' in relative_path:
-        return {"error": "Invalid relative path"}
-    if relative_path == "":
-        return {"error": "Relative path is required"}
-    target_path = os.path.join(base_dir, relative_path)
-    target_path = sanitize_filepath(target_path)
     try:
+        target_path = relative_path_to_absolute(relative_path)
         with open(target_path, "r", encoding=encoding) as f:
             data = f.read()
             if encoding:
@@ -792,7 +843,7 @@ def read_file(relative_path: str, encoding: str = None) -> Dict[str, str]:
         return {"error": str(e)}
 
 @mcp.tool()
-@execute_on_main_thread
+@idaread
 def write_file(relative_path: str, content: str, encoding: str = None) -> Dict[str, str]:
     """
     Write content to a file.
@@ -801,16 +852,10 @@ def write_file(relative_path: str, content: str, encoding: str = None) -> Dict[s
         content: Content to write to the file.
         encoding: Encoding to use when writing the file. If None, the default system encoding is used.
     Returns:
-        None
+        A message indicating success or failure.
     """
-    base_dir = os.path.dirname(idc.get_input_file_path())
-    if  ':' in relative_path or '..' in relative_path or '//' in relative_path:
-        return {"error": "Invalid relative path"}
-    if relative_path == "":
-        return {"error": "Relative path is required"}
     try:
-        target_path = os.path.join(base_dir, relative_path)
-        target_path = sanitize_filepath(target_path)
+        target_path = relative_path_to_absolute(relative_path)
         with open(target_path, "w", encoding=encoding) as f:
             f.write(content)
             return {"success": f"File written successfully to '{relative_path}'"}
@@ -818,61 +863,51 @@ def write_file(relative_path: str, content: str, encoding: str = None) -> Dict[s
         return {"error": str(e)}
 
 @mcp.tool()
-@execute_on_main_thread
+@idaread
 def read_binary(relative_path: str) -> Dict[str, str]:
     """
     Read the content of a binary file.
     Args:
         relative_path: Relative path to the file from the current binary's directory.
     Returns:
-        The binary content of the file.
+        A message indicating success or failure. If success, the content is base64 encoded binary data.
     """
-    base_dir = os.path.dirname(idc.get_input_file_path())
-    if  ':' in relative_path or '..' in relative_path or '//' in relative_path:
-        return {"error": "Invalid relative path"}
-    if relative_path == "":
-        return {"error": "Relative path is required"}
-    target_path = os.path.join(base_dir, relative_path)
-    target_path = sanitize_filepath(target_path)
     try:
+        target_path = relative_path_to_absolute(relative_path)
         with open(target_path, "rb") as f:
             data = f.read()
-            b64_data = base64.b64encode(bytes(data)).replace(b"\n", b"").encode('ascii')
+            b64_data = base64.b64encode(bytes(data)).replace(b"\n", b"").decode('ascii')
             return {"success": "application/octet-stream;base64," + b64_data}
     except Exception as e:
         return {"error": str(e)}
 
 
 @mcp.tool()
-@execute_on_main_thread
+@idaread
 def write_binary(relative_path: str , content: str) -> Dict[str, str]:
     """
-    Write content to a binary file.
+    Write base64 content to a file under the input binary's directory.
     Args:
-        relative_path: Relative path to the file from the current binary's directory.
-        content: Binary content to write to the file.
+        relative_path: Path relative to the input binary's directory (may include subdirs).
+        content: Base64 payload, prefixed with a MIME type like 'application/octet-stream;base64,'.
     Returns:
-        None
+        A message indicating success or failure. {"success": "..."} or {"error": "..."}
     """
-    base_dir = os.path.dirname(idc.get_input_file_path())
-    if  ':' in relative_path or '..' in relative_path or '//' in relative_path:
-        return {"error": "Invalid relative path"}
-    if relative_path == "":
-        return {"error": "Relative path is required"}
-    target_path = os.path.join(base_dir, relative_path)
-    target_path = sanitize_filepath(target_path)
+    if "application/octet-stream;base64," not in content:
+        return {"error": "Content must be base64 encoded binary data with the prefix 'application/octet-stream;base64,'"}
     try:
+        target_path = relative_path_to_absolute(relative_path)
         with open(target_path, "wb") as f:
-            content = content.replace("application/octet-stream;base64,", "").decode('ascii')
-            content = base64.b64decode(content)
+            content = content.split("application/octet-stream;base64,")[1]
+            content = base64.b64decode(content, validate=True)
             f.write(content)
             return {"success": f"Binary file written successfully to '{relative_path}'"}
     except Exception as e:
         return {"error": str(e)}
 
 @mcp.tool()
-@execute_on_main_thread
-def get_instruction_length(address: int) -> int:
+@idaread
+def get_instruction_length(address: int) -> Dict[str, Any]:
     """
     Retrieves the length (in bytes) of the instruction at the specified address.
 
@@ -880,7 +915,7 @@ def get_instruction_length(address: int) -> int:
         address: The address of the instruction.
 
     Returns:
-        The length (in bytes) of the instruction.  Returns 0 if the instruction cannot be decoded.
+        A dictionary containing either the length of the instruction or an error message.
     """
     try:
         # Create an insn_t object to store instruction information.
@@ -889,19 +924,19 @@ def get_instruction_length(address: int) -> int:
         # Decode the instruction.
         length = ida_ua.decode_insn(insn, address)
         if length == 0:
-            print(f"Failed to decode instruction at address {hex(address)}")
-            return 0
+            return {"error": f"Failed to decode instruction at address {hex(address)}"}
 
-        return length
+        return {"success": length}
     except Exception as e:
-        print(f"Error getting instruction length: {str(e)}")
-        return 0
+        return {"error": str(e)}
 
 
 @mcp.prompt()
 def binary_analysis_strategy() -> Dict[str, str]:
     """
     Guild for analyzing the binary
+    Returns:
+        The content of the guideline file or an error message.
     """
     try:
         script_path = os.path.realpath(os.path.abspath(__file__))
