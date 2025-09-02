@@ -44,8 +44,8 @@ Add the following configuration to the `mcp.json` file in Claude or VSCode:
 {
   "mcpServers": {
     "IDAPro": {
-      "url": "http://127.0.0.1:3000/sse",
-      "type": "sse"
+      "url": "http://127.0.0.1:3000/mcp",
+      "type": "streamable-http"
     }
   }
 }
@@ -103,7 +103,7 @@ When analyzing binary files, it's recommended to follow these steps:
 
 MIT License
 
-Copyright (c) 2023 
+Copyright (c) 2023
 
 Permission is hereby granted, free of charge, to any person obtaining a copy
 of this software and associated documentation files (the "Software"), to deal
