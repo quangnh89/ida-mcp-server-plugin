@@ -11,7 +11,9 @@ import glob
 import os
 import threading
 import base64
-
+import sys
+if sys.version_info < (3, 10):
+    raise RuntimeError("Python 3.10 or higher is required for the MCP plugin")
 try:
     import ida_bytes
     import ida_ua
@@ -583,7 +585,6 @@ def get_metadata() -> Dict[str, Any]:
 
         try:
             # https://www.hex-rays.com/products/ida/support/sdkdoc/structidainfo.html
-            info = idaapi.get_inf_structure()
             omin_ea = info.omin_ea
             omax_ea = info.omax_ea
         except AttributeError:
@@ -613,7 +614,7 @@ def get_metadata() -> Dict[str, Any]:
 
 
 @mcp.tool()
-@idaread
+@idawrite
 def rename_local_variable(func_ea: int, old_name: str, new_name: str) -> Dict[str, str]:
     """
     Rename a local variable in a function.
@@ -641,7 +642,7 @@ def rename_local_variable(func_ea: int, old_name: str, new_name: str) -> Dict[st
 
 
 @mcp.tool()
-@idaread
+@idawrite
 def rename_global_variable(old_name: str, new_name: str) -> Dict[str, str]:
     """
     Rename a global variable.
@@ -666,7 +667,7 @@ def rename_global_variable(old_name: str, new_name: str) -> Dict[str, str]:
 
 
 @mcp.tool()
-@idaread
+@idawrite
 def set_global_variable_name(ea: int, new_name: str) -> Dict[str, str]:
     """
     Set the name of a global variable at a specific address.
@@ -688,7 +689,7 @@ def set_global_variable_name(ea: int, new_name: str) -> Dict[str, str]:
 
 
 @mcp.tool()
-@idaread
+@idawrite
 def set_global_variable_type(variable_name: str, new_type: str) -> Dict[str, str]:
     """
     Set the type of a global variable at a specific address.
@@ -714,7 +715,7 @@ def set_global_variable_type(variable_name: str, new_type: str) -> Dict[str, str
 
 
 @mcp.tool()
-@idaread
+@idawrite
 def set_function_name(ea: int, new_name: str) -> str:
     """
     Set the name of a function at a specific address.
@@ -736,7 +737,7 @@ def set_function_name(ea: int, new_name: str) -> str:
 
 
 @mcp.tool()
-@idaread
+@idawrite
 def set_function_prototype(ea: int, prototype: str) -> Dict[str, str]:
     """
     Set the prototype of a function at a specific address.
