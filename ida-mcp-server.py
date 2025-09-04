@@ -12,8 +12,9 @@ import os
 import threading
 import base64
 import sys
-if sys.version_info < (3, 10):
-    raise RuntimeError("Python 3.10 or higher is required for the MCP plugin")
+
+if sys.version_info < (3, 9):
+    raise RuntimeError("Python 3.9 or higher is required for the MCP plugin")
 try:
     import ida_bytes
     import ida_ua
@@ -27,6 +28,8 @@ try:
     import ida_kernwin
     import idaapi
     import ida_typeinf
+    if idaapi.IDA_SDK_VERSION < 770:
+        raise RuntimeError("IDA Pro 7.7 or higher is required for the MCP plugin")
 
 except ImportError:
     print("This script must be run within IDA Pro with Python support.")
@@ -34,11 +37,17 @@ except ImportError:
 
 from typing import Dict, List, Any, Tuple
 from functools import wraps
+import uvicorn
+import asyncio
 from fastmcp import FastMCP
 
+## Server Configuration
+MCP_SERVER_HOST = "localhost"
+MCP_SERVER_PORT = 3000
+MCP_SERVER_PATH = "/mcp"
 
 # Initialize FastMCP server for IDA tools
-mcp = FastMCP("IDA MCP Server", port=3000)
+mcp = FastMCP("IDA MCP Server")
 
 def idaread(f):
     """Decorator to ensure the function runs on IDA's main thread."""
@@ -186,7 +195,7 @@ def get_bytes(ea: int, size: int) -> Dict[str, Any]:
     try:
         data = ida_bytes.get_bytes(ea, size)
         if data is None:
-            return {"error": f"Failed to read {size} bytes at address 0x{ea:08X}"}
+            return {"error": f"Failed to read {size} (0x{size:x}) bytes at address 0x{ea:08X}"}
         b64_data = base64.b64encode(bytes(data)).replace(b"\n", b"").decode('ascii')
         return {"success": "application/octet-stream;base64," + b64_data}
     except Exception as e:
@@ -196,15 +205,18 @@ def get_bytes(ea: int, size: int) -> Dict[str, Any]:
 
 @mcp.tool()
 @idaread
-def get_disasm(ea: int) -> str:
+def get_disasm(ea: int) -> Dict[str, str]:
     """Get disassembly at specified address.
 
     Args:
         ea: Effective address to disassemble
     Returns:
-        Disassembly line as a string
+        Disassembly line as a string or an error message
     """
-    return idc.generate_disasm_line(ea, 0)
+    try:
+        return {"success": idc.generate_disasm_line(ea, 0)}
+    except Exception as e:
+        return {"error": f"Error generating disassembly at 0x{ea:08X}: {str(e)}"}
 
 
 @mcp.tool()
@@ -235,15 +247,19 @@ def get_decompiled_func(ea: int) -> Dict[str, Any]:
 
 @mcp.tool()
 @idaread
-def get_function_name(ea: int) -> str:
+def get_function_name(ea: int) -> Dict[str, Any]:
     """Get function name at specified address.
 
     Args:
         ea: Effective address of the function
     Returns:
-        Name of the function or empty string if not found
+        Name of the function or an error message if not found
     """
-    return ida_name.get_name(ea)
+    name = ida_name.get_name(ea)
+    if name and len(name) > 0:
+        return {"success": name}
+    else:
+        return {"error": f"No name at address 0x{ea:08X}"}
 
 
 @mcp.tool()
@@ -404,7 +420,7 @@ def get_entry_points() -> Dict[str, Any]:
 
 
 @mcp.tool()
-@idaread
+@idawrite
 def make_function(ea1: int, ea2: int = ida_idaapi.BADADDR) -> Dict[str, Any]:
     """
     Make a function at specified address.
@@ -420,7 +436,7 @@ def make_function(ea1: int, ea2: int = ida_idaapi.BADADDR) -> Dict[str, Any]:
 
 
 @mcp.tool()
-@idaread
+@idawrite
 def undefine_function(ea: int) -> Dict[str, Any]:
     """
     Undefine a function at specified address.
@@ -568,7 +584,7 @@ def get_metadata() -> Dict[str, Any]:
     Get metadata about the current binary.
 
     Returns:
-        A dictionary containing metadata such as file path, architecture, bitness, and entry point.
+        A dictionary containing metadata such as file path, architecture, bitness, architecture...
     """
     try:
         import ida_nalt
@@ -716,7 +732,7 @@ def set_global_variable_type(variable_name: str, new_type: str) -> Dict[str, str
 
 @mcp.tool()
 @idawrite
-def set_function_name(ea: int, new_name: str) -> str:
+def set_function_name(ea: int, new_name: str) -> Dict[str, str]:
     """
     Set the name of a function at a specific address.
 
@@ -952,6 +968,48 @@ def binary_analysis_strategy() -> Dict[str, str]:
         return {"error": str(e)}
 
 
+class MCPServerController(object):
+    """
+    Controller to manage the MCP server lifecycle.
+    """
+    def __init__(self, host: str = MCP_SERVER_HOST, port: int = MCP_SERVER_PORT, path: str = MCP_SERVER_PATH):
+        self.host = host
+        self.port = port
+        self.path = path
+        self.server_thread: threading.Thread = None
+        self.server: uvicorn.Server = None
+
+    def start_server(self):
+        if self.server_thread and self.server_thread.is_alive():
+            print("MCP Server is already running.")
+            return
+        app = mcp.http_app(path=self.path, transport="streamable-http")
+        cfg = uvicorn.Config(app, host=self.host, port=self.port, log_level="info", lifespan="on", timeout_graceful_shutdown=2)
+        self.server = uvicorn.Server(cfg)
+
+        def _serve():
+            try:
+                asyncio.run(self.server.serve())
+            except Exception as e:
+                print(f"Server error: {str(e)}")
+
+        self.server_thread = threading.Thread(target=_serve, daemon=True)
+        self.server_thread.start()
+        print(f"MCP Server started at http://{self.host}:{self.port}{self.path}")
+
+    def stop_server(self, timeout: int =5):
+        if self.server_thread and self.server_thread.is_alive():
+            srv = self.server
+            if srv:
+                srv.should_exit = True
+                srv.force_exit = True
+            self.server_thread.join(timeout=timeout)
+        else:
+            print("MCP Server is not running.")
+
+
+_mcp_ctrl = MCPServerController(host=MCP_SERVER_HOST, port=MCP_SERVER_PORT, path=MCP_SERVER_PATH)
+
 class ModelContextProtocolPlugin(ida_idaapi.plugin_t):
     """
     MCP IDA Pro Plugin server
@@ -967,16 +1025,7 @@ class ModelContextProtocolPlugin(ida_idaapi.plugin_t):
         try:
             print("Initializing IDA Model Context Protocol Server...")
 
-            def run_server():
-                try:
-                    mcp.run(transport="streamable-http")
-                except Exception as e:
-                    print(f"Server error: {str(e)}")
-
-            server_thread = threading.Thread(target=run_server)
-            server_thread.daemon = True
-            server_thread.start()
-            print("Server started successfully! serve at http://localhost:3000/mcp")
+            _mcp_ctrl.start_server()
             return ida_idaapi.PLUGIN_KEEP
         except Exception as e:
             print(f"Failed to start server: {str(e)}")
@@ -987,6 +1036,8 @@ class ModelContextProtocolPlugin(ida_idaapi.plugin_t):
 
     def term(self):
         print("Terminating IDA Model Context Protocol Server...")
+        _mcp_ctrl.stop_server(timeout=5)
+        print("IDA Model Context Protocol Server terminated.")
 
 
 def PLUGIN_ENTRY():
